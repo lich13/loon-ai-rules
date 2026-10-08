@@ -16,6 +16,7 @@ META_REPOSITORY = "https://github.com/MetaCubeX/meta-rules-dat"
 META_HEAD = "https://api.github.com/repos/MetaCubeX/meta-rules-dat/commits/meta"
 META_RAW = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat"
 KELEE_URL = "https://kelee.one/Tool/Loon/Lsr/AI.lsr"
+LOON_USER_AGENT = "Loon/1005 CFNetwork/3860.600.31 Darwin/25.0.0"
 CLAUDE_SUFFIXES = frozenset((
     "anthropic.com", "clau.de", "claude.ai", "claude.com", "claude.dev",
     "claudemcpclient.com", "claudemcpcontent.com", "claudeusercontent.com",
@@ -171,7 +172,7 @@ def build_rules(meta_ai, meta_claude, kelee):
 def fetch_text(url):
     # Only public upstream URLs are supplied here. No app settings or credentials.
     user_agent = (
-        "Loon/1005 CFNetwork/3860.600.31 Darwin/25.0.0"
+        LOON_USER_AGENT
         if url == KELEE_URL else "loon-ai-rules/1"
     )
     result = subprocess.run(
@@ -193,6 +194,48 @@ def fetch_text(url):
         return result.stdout.decode("utf-8")
     except UnicodeDecodeError as error:
         raise RuleError("public upstream is not UTF-8") from error
+
+
+def fetch_kelee_with_browser_tls():
+    """Use Safari's TLS profile with the Loon UA for the public Loon endpoint."""
+    try:
+        from curl_cffi import get
+    except ImportError as error:
+        raise RuleError("browser TLS support requires the pinned curl_cffi dependency") from error
+    content = bytearray()
+    oversized = False
+
+    def receive(chunk):
+        nonlocal oversized
+        if len(content) + len(chunk) > 2_000_000:
+            oversized = True
+            return 0
+        content.extend(chunk)
+        return len(chunk)
+
+    try:
+        response = get(
+            KELEE_URL, impersonate="safari_ios", default_headers=False,
+            headers={"User-Agent": LOON_USER_AGENT, "Accept": "*/*"},
+            timeout=60, max_redirects=3, content_callback=receive,
+        )
+    except Exception as error:
+        if oversized:
+            raise RuleError("Kelee: source is too large") from None
+        raise RuleError(f"Kelee: browser TLS transport failed ({type(error).__name__})") from None
+    if oversized:
+        raise RuleError("Kelee: source is too large")
+    challenge = ", browser challenge" if b"/cdn-cgi/challenge-platform" in content or b"cf-chl-" in content else ""
+    if response.status_code != 200 or challenge:
+        raise RuleError(f"Kelee: public upstream download failed (HTTP {response.status_code}{challenge})")
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RuleError("Kelee: public upstream is not UTF-8") from error
+
+
+def fetch_with_browser_tls(url):
+    return fetch_kelee_with_browser_tls() if url == KELEE_URL else fetch_text(url)
 
 
 def fetch_sources(fetch=fetch_text):
@@ -270,9 +313,10 @@ def update(output_dir, fetch=fetch_text):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "rules")
+    parser.add_argument("--browser-tls", action="store_true", help="use Safari-compatible TLS for the Loon source")
     args = parser.parse_args()
     try:
-        rules, changed = update(args.output)
+        rules, changed = update(args.output, fetch_with_browser_tls if args.browser_tls else fetch_text)
     except (RuleError, OSError, subprocess.TimeoutExpired) as error:
         parser.exit(1, f"Rule update stopped: {error}\n")
     print(json.dumps({"changed": changed, "counts": {name: len(lines) for name, lines in rules.items()}}))

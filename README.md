@@ -14,12 +14,14 @@
 
 GitHub Actions 每天北京时间 10:30 取源并校验，也可手动运行。MetaCubeX 的两个输入固定到同一提交，全部源验证成功后一次发布三份产物。下载失败、空源、关键域名缺失或未知语法会阻止更新，保留已发布版本。内容未变时不产生提交。
 
-可莉的 Loon 规则入口按 `User-Agent` 识别客户端；生成器仅对该入口使用 Loon 请求头，取得原生文本规则。
+可莉的 Loon 规则入口使用 Loon `User-Agent`。CI 还通过固定版本 `curl_cffi` 使用 Safari iOS 的 TLS 参数，以处理普通 Linux curl 遇到的浏览器校验；只对可莉入口启用。HTTP 错误、校验页和不合法规则仍会停止发布。
 
 ```sh
 python3 -m unittest discover -s scripts -p 'test_ai_rules.py' -v
 python3 scripts/update_ai_rules.py
 ```
+
+需要与 CI 相同的请求方式时，安装 `curl_cffi==0.16.3` 并添加 `--browser-tls`；常规本机运行仍只依赖 Python 标准库和 curl。
 
 当前唯一的 Azure 域名正则转换为限定关键词与 `webpubsub.azure.com` 后缀的 `AND` 规则，与可莉的 Loon 兼容写法一致；不承诺对任意正则做无损转换。新语法须先人工审查并增加测试。
 

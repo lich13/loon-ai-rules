@@ -5,9 +5,11 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import update_ai_rules as generator
 
@@ -356,6 +358,130 @@ class FetchTextTests(OfflineTestCase):
                     with self.assertRaises(type(error)) as caught:
                         generator.fetch_text(generator.KELEE_URL)
                 self.assertIs(caught.exception, error)
+
+
+class BrowserTlsTests(OfflineTestCase):
+    def setUp(self):
+        super().setUp()
+        self.get = Mock(side_effect=AssertionError("browser TLS requests require a fixture"))
+        module = patch.dict(sys.modules, {"curl_cffi": SimpleNamespace(get=self.get)})
+        module.start()
+        self.addCleanup(module.stop)
+
+    def serve(self, chunks, status=200):
+        def request(_url, **options):
+            for chunk in chunks:
+                self.assertEqual(options["content_callback"](chunk), len(chunk))
+            return SimpleNamespace(status_code=status)
+
+        self.get.side_effect = request
+
+    def test_kelee_uses_loon_headers_with_safari_tls_and_returns_streamed_content(self):
+        chunks = (b"DOMAIN,", b"example.invalid\n")
+        self.serve(chunks)
+        self.assertEqual(generator.fetch_kelee_with_browser_tls(), "DOMAIN,example.invalid\n")
+        self.get.assert_called_once()
+        self.assertEqual(self.get.call_args.args, (generator.KELEE_URL,))
+        options = self.get.call_args.kwargs
+        self.assertEqual(options["impersonate"], "safari_ios")
+        self.assertIs(options["default_headers"], False)
+        self.assertEqual(options["headers"], {
+            "User-Agent": "Loon/1005 CFNetwork/3860.600.31 Darwin/25.0.0",
+            "Accept": "*/*",
+        })
+        self.assertEqual(options["timeout"], 60)
+        self.assertEqual(options["max_redirects"], 3)
+
+    def test_only_the_exact_kelee_entrypoint_switches_transport(self):
+        self.serve((b"DOMAIN,example.invalid\n",))
+        urls = (
+            generator.META_HEAD,
+            f"{generator.META_RAW}/{REVISION}/geo/geosite/classical/anthropic.list",
+            "https://example.invalid/Tool/Loon/Lsr/AI.lsr",
+            generator.KELEE_URL + "?fixture=example.invalid",
+            generator.KELEE_URL + "/",
+        )
+        with patch.object(generator, "fetch_text", return_value="fixture curl") as curl:
+            self.assertEqual(
+                generator.fetch_with_browser_tls(generator.KELEE_URL),
+                "DOMAIN,example.invalid\n",
+            )
+            curl.assert_not_called()
+            for url in urls:
+                with self.subTest(source=url.rsplit("/", 1)[-1]):
+                    self.assertEqual(generator.fetch_with_browser_tls(url), "fixture curl")
+                    curl.assert_called_with(url)
+            self.assertEqual(curl.call_count, len(urls))
+        self.get.assert_called_once()
+
+    def test_source_at_the_size_limit_is_accepted(self):
+        self.serve((b"x" * 1_000_000, b"y" * 1_000_000))
+        self.assertEqual(generator.fetch_kelee_with_browser_tls(), "x" * 1_000_000 + "y" * 1_000_000)
+
+    def test_oversized_stream_is_aborted_and_rejected_even_if_transport_returns(self):
+        for transport_raises in (False, True):
+            with self.subTest(transport_raises=transport_raises):
+                accepted = []
+
+                def request(_url, **options):
+                    receive = options["content_callback"]
+                    accepted.append(receive(b"x" * 1_000_000))
+                    accepted.append(receive(b"y" * 1_000_000))
+                    accepted.append(receive(b"z"))
+                    if transport_raises:
+                        raise RuntimeError("fixture callback aborted: example.invalid")
+                    return SimpleNamespace(status_code=200)
+
+                self.get.side_effect = request
+                with self.assertRaisesRegex(generator.RuleError, "^Kelee: source is too large$"):
+                    generator.fetch_kelee_with_browser_tls()
+                self.assertEqual(accepted, [1_000_000, 1_000_000, 0])
+
+    def test_non_success_status_is_rejected_without_response_contents(self):
+        for status in (204, 301, 403, 500):
+            with self.subTest(status=status):
+                self.serve((b"fixture response body: example.invalid",), status)
+                with self.assertRaises(generator.RuleError) as caught:
+                    generator.fetch_kelee_with_browser_tls()
+                self.assertEqual(
+                    str(caught.exception),
+                    f"Kelee: public upstream download failed (HTTP {status})",
+                )
+                self.assertNotIn("example.invalid", str(caught.exception))
+
+    def test_browser_challenges_are_rejected_without_response_contents(self):
+        for status in (200, 403):
+            for marker in (b"/cdn-cgi/challenge-platform", b"cf-chl-fixture"):
+                with self.subTest(status=status, marker=marker):
+                    self.serve((b"<html>fixture: example.invalid ", marker, b"</html>"), status)
+                    with self.assertRaisesRegex(generator.RuleError, "browser challenge") as caught:
+                        generator.fetch_kelee_with_browser_tls()
+                    self.assertNotIn("example.invalid", str(caught.exception))
+                    self.assertNotIn(marker.decode(), str(caught.exception))
+
+    def test_non_utf8_content_is_rejected(self):
+        self.serve((b"DOMAIN,example.invalid\n", b"\xff\xfe"))
+        with self.assertRaisesRegex(generator.RuleError, "^Kelee: public upstream is not UTF-8$"):
+            generator.fetch_kelee_with_browser_tls()
+
+    def test_transport_failures_are_rejected_without_exception_details(self):
+        for error_type in (TimeoutError, OSError, RuntimeError):
+            with self.subTest(error_type=error_type.__name__):
+                self.get.side_effect = error_type("fixture transport details: example.invalid")
+                with self.assertRaises(generator.RuleError) as caught:
+                    generator.fetch_kelee_with_browser_tls()
+                self.assertEqual(
+                    str(caught.exception),
+                    f"Kelee: browser TLS transport failed ({error_type.__name__})",
+                )
+                self.assertNotIn("example.invalid", str(caught.exception))
+                self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_missing_optional_dependency_is_rejected(self):
+        with patch.dict(sys.modules, {"curl_cffi": None}):
+            with self.assertRaisesRegex(generator.RuleError, "requires the pinned curl_cffi dependency"):
+                generator.fetch_kelee_with_browser_tls()
+        self.get.assert_not_called()
 
 
 class FetchSourcesTests(OfflineTestCase):
