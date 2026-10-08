@@ -1,0 +1,23 @@
+# Public routing rules for Loon and mihomo. Generated; do not edit.
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/32bbb6c45c63a491c571f98cd9d863d7fd6771dc/geo/geosite/classical/anthropic.list
+# Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.
+# Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE
+# https://github.com/v2fly/domain-list-community/blob/master/LICENSE
+# Additions: Claude Desktop network requirements and official inbound IP ranges.
+# https://code.claude.com/docs/en/desktop#network-access-requirements
+# https://platform.claude.com/docs/en/api/ip-addresses
+# Rules: 12
+# Content SHA-256: b1e7499adb8fd8df24b5820e86295dfa5d54d7b1845c20a2fc2ad152fe060eaf
+
+DOMAIN,servd-anthropic-website.b-cdn.net
+DOMAIN-SUFFIX,anthropic.com
+DOMAIN-SUFFIX,clau.de
+DOMAIN-SUFFIX,claude.ai
+DOMAIN-SUFFIX,claude.app
+DOMAIN-SUFFIX,claude.com
+DOMAIN-SUFFIX,claude.dev
+DOMAIN-SUFFIX,claudemcpclient.com
+DOMAIN-SUFFIX,claudemcpcontent.com
+DOMAIN-SUFFIX,claudeusercontent.com
+IP-CIDR,160.79.104.0/23,no-resolve
+IP-CIDR6,2607:6bc0::/48,no-resolve

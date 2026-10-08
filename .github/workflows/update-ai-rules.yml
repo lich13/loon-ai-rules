@@ -1,0 +1,41 @@
+name: Update public AI rules
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: public-ai-rules
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test conversion and failure handling
+        run: python3 -m unittest discover -s scripts -p 'test_ai_rules.py' -v
+      - name: Download and validate all public sources
+        run: python3 scripts/update_ai_rules.py
+      - name: Publish the complete rule set
+        run: |
+          set -euo pipefail
+          git add -- rules/Claude.list rules/AI-Meta.list rules/AI-Kelee.list
+          if git diff --cached --quiet; then
+            echo "Rules are unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update public AI routing rules"
+          git push origin HEAD:main

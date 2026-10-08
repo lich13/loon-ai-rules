@@ -1,0 +1,562 @@
+#!/usr/bin/env python3
+"""Offline behavior checks for the public AI routing rule generator."""
+
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import update_ai_rules as generator
+
+
+REVISION = "a" * 40
+NEXT_REVISION = "b" * 40
+CLAUDE_CORE = (
+    "DOMAIN-SUFFIX,anthropic.com",
+    "DOMAIN-SUFFIX,clau.de",
+    "DOMAIN-SUFFIX,claude.ai",
+    "DOMAIN-SUFFIX,claude.com",
+    "DOMAIN-SUFFIX,claude.dev",
+    "DOMAIN-SUFFIX,claudemcpclient.com",
+    "DOMAIN-SUFFIX,claudemcpcontent.com",
+    "DOMAIN-SUFFIX,claudeusercontent.com",
+    "DOMAIN,servd-anthropic-website.b-cdn.net",
+    "DOMAIN,upstream-core.example.invalid",
+)
+AI_CORE = (
+    "DOMAIN-SUFFIX,chatgpt.com",
+    "DOMAIN-SUFFIX,openai.com",
+    "DOMAIN,gemini.google.com",
+    "DOMAIN-SUFFIX,openrouter.ai",
+    "DOMAIN,copilot-proxy.githubusercontent.com",
+)
+AI_SYNTHETIC = tuple(
+    f"DOMAIN-SUFFIX,provider-{number}.example.invalid" for number in range(7)
+)
+REVIEWED_NETWORKS = tuple(
+    rule for rule in generator.CLAUDE_EXTRA if rule.startswith(("IP-CIDR,", "IP-CIDR6,"))
+)
+KELEE_ADDITIONS = (
+    "DOMAIN-SUFFIX,supplement.example.invalid",
+    "DOMAIN,standalone.example.invalid",
+)
+
+
+def source_text(lines):
+    return "\n".join(lines) + "\n"
+
+
+def valid_sources():
+    """Independent public service expectations plus synthetic deduplication cases."""
+    claude = source_text(CLAUDE_CORE)
+    ai = source_text(AI_CORE + AI_SYNTHETIC + CLAUDE_CORE + (
+        "DOMAIN,api.anthropic.com",
+        "DOMAIN,download.claude.app",
+        "DOMAIN,api.provider-0.example.invalid",
+        "DOMAIN-SUFFIX,child.provider-0.example.invalid",
+    ) + REVIEWED_NETWORKS)
+    kelee = ai + source_text(KELEE_ADDITIONS + (
+        "DOMAIN,api.supplement.example.invalid",
+        "DOMAIN-SUFFIX,child.supplement.example.invalid",
+        "DOMAIN,standalone.example.invalid",
+    ))
+    return {"meta_ai": ai, "meta_claude": claude, "kelee": kelee}
+
+
+class FixtureFetch:
+    def __init__(self, sources=None, revision=REVISION):
+        self.sources = valid_sources() if sources is None else sources
+        base = f"{generator.META_RAW}/{revision}/geo/geosite/classical"
+        self.responses = {
+            generator.META_HEAD: json.dumps({"sha": revision}),
+            f"{base}/category-ai-!cn.list": self.sources["meta_ai"],
+            f"{base}/anthropic.list": self.sources["meta_claude"],
+            generator.KELEE_URL: self.sources["kelee"],
+        }
+        self.calls = []
+
+    def __call__(self, url):
+        self.calls.append(url)
+        if url not in self.responses:
+            raise AssertionError("request is outside the fixed source fixture")
+        response = self.responses[url]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def snapshot(directory):
+    result = {}
+    for name in generator.OUTPUT_NAMES:
+        path = directory / name
+        stat = path.stat()
+        result[name] = (path.read_bytes(), stat.st_mtime_ns, stat.st_ino)
+    return result
+
+
+class OfflineTestCase(unittest.TestCase):
+    def setUp(self):
+        network = patch.object(
+            generator.subprocess, "run",
+            side_effect=AssertionError("network requests are forbidden in these tests"),
+        )
+        network.start()
+        self.addCleanup(network.stop)
+
+
+class ParseRuleTests(OfflineTestCase):
+    def test_domain_rules_normalize_case_and_whitespace(self):
+        for kind in ("DOMAIN", "DOMAIN-SUFFIX"):
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    generator.parse_rule(f"  {kind} , API.Example.Invalid  "),
+                    f"{kind},api.example.invalid",
+                )
+
+    def test_audited_conjunctions_accept_both_operand_orders(self):
+        self.assertEqual(len(generator.ALLOWED_CONJUNCTIONS), 3)
+        for keyword, suffix in generator.ALLOWED_CONJUNCTIONS:
+            expected = f"AND,((DOMAIN-KEYWORD,{keyword}),(DOMAIN-SUFFIX,{suffix}))"
+            reverse = f" AND, ((DOMAIN-SUFFIX, {suffix}), (DOMAIN-KEYWORD, {keyword})) "
+            with self.subTest(keyword=keyword):
+                self.assertEqual(generator.parse_rule(expected), expected)
+                self.assertEqual(generator.parse_rule(reverse), expected)
+
+    def test_azure_regex_converts_to_the_audited_conjunction(self):
+        self.assertEqual(
+            generator.parse_rule(f"DOMAIN-REGEX,{generator.AZURE_REGEX}"),
+            "AND,((DOMAIN-KEYWORD,chatgpt-async-webps-prod-),(DOMAIN-SUFFIX,webpubsub.azure.com))",
+        )
+
+    def test_only_both_reviewed_ip_networks_are_accepted(self):
+        self.assertEqual(len(REVIEWED_NETWORKS), 2)
+        self.assertEqual({line.split(",")[0] for line in REVIEWED_NETWORKS}, {"IP-CIDR", "IP-CIDR6"})
+        for line in REVIEWED_NETWORKS:
+            with self.subTest(family=line.split(",")[0]):
+                self.assertEqual(generator.parse_rule(line), line)
+
+    def test_unknown_syntax_regex_and_ip_rules_are_rejected(self):
+        invalid = (
+            "DOMAIN,example.invalid,DIRECT",
+            "DOMAIN-KEYWORD,example",
+            r"DOMAIN-REGEX,^.*\.example\.invalid$",
+            "DOMAIN-REGEX," + generator.AZURE_REGEX.replace(r"\S+", ".*"),
+            "AND,((DOMAIN-KEYWORD,example),(DOMAIN-SUFFIX,example.invalid))",
+            "OR,((DOMAIN,one.example.invalid),(DOMAIN,two.example.invalid))",
+            "IP-CIDR,127.0.0.1/32,no-resolve",
+            "IP-CIDR6,::1/128,no-resolve",
+            "IP-CIDR,127.0.0.1/8,no-resolve",
+            "IP-CIDR,127.0.0.256/32,no-resolve",
+            "IP-ASN,64512,no-resolve",
+            "PROCESS-NAME,fixture-process",
+            "MATCH,DIRECT",
+        )
+        for line in invalid:
+            with self.subTest(rule=line.split(",")[0]):
+                with self.assertRaises(generator.RuleError):
+                    generator.parse_rule(line)
+
+    def test_reviewed_ips_still_require_the_correct_family_and_no_resolve(self):
+        for line in REVIEWED_NETWORKS:
+            kind, network, _ = line.split(",")
+            other_family = "IP-CIDR6" if kind == "IP-CIDR" else "IP-CIDR"
+            for invalid in (f"{kind},{network}", f"{other_family},{network},no-resolve", line + ",DIRECT"):
+                with self.subTest(family=kind):
+                    with self.assertRaises(generator.RuleError):
+                        generator.parse_rule(invalid)
+
+    def test_malformed_domains_are_rejected(self):
+        for domain in ("", "example", "*.example.invalid", "-bad.example.invalid", "bad-.example.invalid", "example.invalid."):
+            with self.subTest(domain=domain):
+                with self.assertRaises(generator.RuleError):
+                    generator.parse_rule(f"DOMAIN,{domain}")
+
+    def test_bom_comments_blank_lines_and_duplicates_are_handled(self):
+        self.assertEqual(
+            generator.parse_rules("\ufeff# fixture\r\n\r\nDOMAIN,API.Example.Invalid\r\n  # comment\r\nDOMAIN,api.example.invalid\n", "fixture"),
+            {"DOMAIN,api.example.invalid"},
+        )
+
+    def test_unknown_rule_reports_the_source_and_line_number(self):
+        with self.assertRaisesRegex(generator.RuleError, r"fixture:3: unsupported rule type"):
+            generator.parse_rules("# fixture\nDOMAIN,example.invalid\nIP-ASN,64512\n", "fixture")
+
+    def test_empty_and_oversized_sources_are_rejected(self):
+        for text in ("", "\ufeff# only a comment\n\n", "#" + "x" * 2_000_000):
+            with self.subTest(length=len(text)):
+                with self.assertRaises(generator.RuleError):
+                    generator.parse_rules(text, "fixture")
+
+
+class BuildRulesTests(OfflineTestCase):
+    def test_complete_claude_core_and_official_supplements_are_preserved(self):
+        built = generator.build_rules(**valid_sources())
+        self.assertEqual(
+            built["Claude.list"],
+            sorted(CLAUDE_CORE + ("DOMAIN-SUFFIX,claude.app",) + REVIEWED_NETWORKS),
+        )
+
+    def test_claude_is_removed_from_meta_and_kelee(self):
+        built = generator.build_rules(**valid_sources())
+        self.assertEqual(built["AI-Meta.list"], sorted(AI_CORE + AI_SYNTHETIC))
+        self.assertEqual(built["AI-Kelee.list"], sorted(KELEE_ADDITIONS))
+        for name in ("AI-Meta.list", "AI-Kelee.list"):
+            with self.subTest(output=name):
+                self.assertTrue(set(built[name]).isdisjoint(built["Claude.list"]))
+
+    def test_kelee_deduplication_respects_suffix_boundaries_and_exact_rules(self):
+        sources = valid_sources()
+        sources["meta_ai"] += "DOMAIN,exact.example.invalid\n"
+        additions = (
+            "DOMAIN-SUFFIX,exact.example.invalid",
+            "DOMAIN,otherprovider-0.example.invalid",
+            "DOMAIN,api.provider-0.example.invalid",
+        )
+        sources["kelee"] += source_text(additions)
+        built = generator.build_rules(**sources)
+        self.assertEqual(built["AI-Kelee.list"], sorted(KELEE_ADDITIONS + additions[:2]))
+
+    def test_plain_github_and_shared_telemetry_do_not_enter_claude(self):
+        for domain in sorted(generator.SHARED_INFRASTRUCTURE) + ["browser-intake-us5-datadoghq.com"]:
+            with self.subTest(domain=domain):
+                sources = valid_sources()
+                sources["meta_claude"] += f"DOMAIN-SUFFIX,{domain}\n"
+                with self.assertRaisesRegex(generator.RuleError, "shared (infrastructure|telemetry)"):
+                    generator.build_rules(**sources)
+
+    def test_unrelated_asn_is_rejected_in_every_source(self):
+        for source in valid_sources():
+            with self.subTest(source=source):
+                sources = valid_sources()
+                sources[source] += "IP-ASN,64512,no-resolve\n"
+                with self.assertRaises(generator.RuleError):
+                    generator.build_rules(**sources)
+
+    def test_anthropic_upstream_cannot_expand_to_ip_rules(self):
+        sources = valid_sources()
+        sources["meta_claude"] += source_text(REVIEWED_NETWORKS)
+        with self.assertRaisesRegex(generator.RuleError, "domain rules only"):
+            generator.build_rules(**sources)
+
+    def test_ordinary_github_is_rejected_but_copilot_is_retained(self):
+        baseline = generator.build_rules(**valid_sources())
+        self.assertIn("DOMAIN,copilot-proxy.githubusercontent.com", baseline["AI-Meta.list"])
+        for source in ("meta_ai", "kelee"):
+            with self.subTest(source=source):
+                sources = valid_sources()
+                sources[source] += "DOMAIN-SUFFIX,github.com\n"
+                with self.assertRaisesRegex(generator.RuleError, "entire GitHub site"):
+                    generator.build_rules(**sources)
+
+    def test_each_required_claude_domain_and_website_cdn_is_guarded(self):
+        for line in CLAUDE_CORE[:-1]:
+            with self.subTest(rule=line):
+                sources = valid_sources()
+                sources["meta_claude"] = source_text(item for item in CLAUDE_CORE if item != line)
+                with self.assertRaisesRegex(generator.RuleError, "Anthropic source lost"):
+                    generator.build_rules(**sources)
+
+    def test_each_required_ai_service_is_guarded(self):
+        for line in AI_CORE:
+            with self.subTest(rule=line):
+                sources = valid_sources()
+                sources["meta_ai"] = source_text(item for item in sources["meta_ai"].splitlines() if item != line)
+                with self.assertRaisesRegex(generator.RuleError, "Meta AI source lost required services"):
+                    generator.build_rules(**sources)
+
+    def test_empty_sources_and_missing_supplements_are_rejected(self):
+        for source in valid_sources():
+            with self.subTest(source=source):
+                sources = valid_sources()
+                sources[source] = "# empty fixture\n"
+                with self.assertRaises(generator.RuleError):
+                    generator.build_rules(**sources)
+        sources = valid_sources()
+        sources["kelee"] = sources["meta_ai"]
+        with self.assertRaisesRegex(generator.RuleError, "incomplete AI sources"):
+            generator.build_rules(**sources)
+
+    def test_suspiciously_small_ai_source_is_rejected(self):
+        sources = valid_sources()
+        sources["meta_ai"] = source_text(AI_CORE)
+        with self.assertRaisesRegex(generator.RuleError, "incomplete AI sources"):
+            generator.build_rules(**sources)
+
+    def test_input_order_comments_and_duplicates_do_not_change_output(self):
+        sources = valid_sources()
+        rearranged = {
+            name: "# regenerated upstream fixture\n" + source_text(reversed(text.splitlines())) + text
+            for name, text in sources.items()
+        }
+        self.assertEqual(generator.build_rules(**sources), generator.build_rules(**rearranged))
+
+
+class FetchTextTests(OfflineTestCase):
+    def test_kelee_request_uses_the_compatible_loon_user_agent(self):
+        content = b"DOMAIN,example.invalid\n"
+        response = subprocess.CompletedProcess([], 0, stdout=content, stderr=b"")
+        with patch.object(generator.subprocess, "run", return_value=response) as run:
+            self.assertEqual(generator.fetch_text(generator.KELEE_URL), content.decode())
+        command = run.call_args.args[0]
+        self.assertEqual(command[-1], generator.KELEE_URL)
+        self.assertEqual(command.count("--user-agent"), 1)
+        self.assertEqual(
+            command[command.index("--user-agent") + 1],
+            "Loon/1005 CFNetwork/3860.600.31 Darwin/25.0.0",
+        )
+
+    def test_only_the_exact_kelee_entrypoint_gets_the_loon_identity(self):
+        urls = (
+            generator.META_HEAD,
+            f"{generator.META_RAW}/{REVISION}/geo/geosite/classical/anthropic.list",
+            "https://example.invalid/Tool/Loon/Lsr/AI.lsr",
+            generator.KELEE_URL + "?fixture=example.invalid",
+        )
+        response = subprocess.CompletedProcess([], 0, stdout=b"fixture", stderr=b"")
+        for url in urls:
+            with self.subTest(source=url.rsplit("/", 1)[-1]):
+                with patch.object(generator.subprocess, "run", return_value=response) as run:
+                    generator.fetch_text(url)
+                command = run.call_args.args[0]
+                self.assertEqual(command[-1], url)
+                self.assertEqual(command.count("--user-agent"), 1)
+                self.assertEqual(command[command.index("--user-agent") + 1], "loon-ai-rules/1")
+
+    def test_failed_curl_responses_report_the_source_without_response_contents(self):
+        for url, source in ((generator.KELEE_URL, "Kelee"), (generator.META_HEAD, "MetaCubeX")):
+            for code in (22, 28):
+                with self.subTest(source=source, code=code):
+                    response = subprocess.CompletedProcess(
+                        [], code, stdout=b"DOMAIN,example.invalid\n",
+                        stderr=b"fixture transport detail: example.invalid",
+                    )
+                    with patch.object(generator.subprocess, "run", return_value=response):
+                        with self.assertRaises(generator.RuleError) as caught:
+                            generator.fetch_text(url)
+                    self.assertEqual(
+                        str(caught.exception),
+                        f"{source}: public upstream download failed (curl {code})",
+                    )
+                    self.assertNotIn("example.invalid", str(caught.exception))
+
+    def test_successful_transport_with_non_utf8_content_is_rejected(self):
+        response = subprocess.CompletedProcess([], 0, stdout=b"\xff\xfe", stderr=b"")
+        with patch.object(generator.subprocess, "run", return_value=response):
+            with self.assertRaisesRegex(generator.RuleError, "not UTF-8"):
+                generator.fetch_text(generator.KELEE_URL)
+
+    def test_process_timeout_and_launch_failure_are_not_converted_to_content(self):
+        failures = (subprocess.TimeoutExpired("fixture download", 70), OSError("fixture launch failure"))
+        for error in failures:
+            with self.subTest(error=type(error).__name__):
+                with patch.object(generator.subprocess, "run", side_effect=error):
+                    with self.assertRaises(type(error)) as caught:
+                        generator.fetch_text(generator.KELEE_URL)
+                self.assertIs(caught.exception, error)
+
+
+class FetchSourcesTests(OfflineTestCase):
+    def test_both_meta_files_are_pinned_to_the_same_single_head_lookup(self):
+        fetch = FixtureFetch()
+        sources, revision = generator.fetch_sources(fetch)
+        self.assertEqual(revision, REVISION)
+        self.assertEqual(sources, valid_sources())
+        self.assertEqual(fetch.calls, list(fetch.responses))
+        self.assertEqual(fetch.calls.count(generator.META_HEAD), 1)
+        self.assertTrue(all(f"/{REVISION}/" in url for url in fetch.calls[1:3]))
+
+    def test_invalid_revision_responses_stop_before_rule_downloads(self):
+        invalid = ("not json", "{}", "null", "[]", '{"sha": null}', '{"sha": 7}',
+                   json.dumps({"sha": "main"}), json.dumps({"sha": "a" * 39}), json.dumps({"sha": "g" * 40}))
+        for response in invalid:
+            with self.subTest(response=response):
+                fetch = FixtureFetch()
+                fetch.responses[generator.META_HEAD] = response
+                with self.assertRaises(generator.RuleError):
+                    generator.fetch_sources(fetch)
+                self.assertEqual(fetch.calls, [generator.META_HEAD])
+
+
+class UpdateTests(OfflineTestCase):
+    def test_all_three_files_have_the_validated_rules_and_matching_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            rules, changed = generator.update(output, FixtureFetch())
+            self.assertTrue(changed)
+            self.assertEqual(set(path.name for path in output.iterdir()), {"Claude.list", "AI-Meta.list", "AI-Kelee.list"})
+            for name, lines in rules.items():
+                with self.subTest(output=name):
+                    text = (output / name).read_text(encoding="utf-8")
+                    body = source_text(lines)
+                    self.assertEqual(text.split("\n\n", 1)[1], body)
+                    self.assertIn(f"# Rules: {len(lines)}\n", text)
+                    self.assertIn(f"# Content SHA-256: {hashlib.sha256(body.encode()).hexdigest()}\n", text)
+                    self.assertNotIn("\r", text)
+                    self.assertIn("# Attribution:", text)
+                    if name == "AI-Kelee.list":
+                        self.assertIn(generator.KELEE_URL, text)
+                        self.assertIn("CC BY-NC-SA 4.0", text)
+                    else:
+                        self.assertIn(f"/{REVISION}/", text)
+            self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
+
+    def test_every_artifact_is_ready_before_the_first_destination_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            expected = generator.build_rules(**valid_sources())
+            replacements = []
+            real_replace = generator.os.replace
+
+            def replace(source, destination):
+                source, destination = Path(source), Path(destination)
+                if not replacements:
+                    self.assertEqual({path.name for path in source.parent.iterdir()}, set(generator.OUTPUT_NAMES))
+                    for name, lines in expected.items():
+                        self.assertEqual((source.parent / name).read_text().split("\n\n", 1)[1], source_text(lines))
+                self.assertEqual(destination.parent, output)
+                replacements.append(destination.name)
+                real_replace(source, destination)
+
+            with patch.object(generator.os, "replace", side_effect=replace):
+                generator.update(output, FixtureFetch())
+            self.assertEqual(replacements, list(generator.OUTPUT_NAMES))
+
+    def test_failure_at_each_download_preserves_existing_files(self):
+        for failed_url in FixtureFetch().responses:
+            with self.subTest(source=failed_url.rsplit("/", 1)[-1]):
+                with tempfile.TemporaryDirectory() as temporary:
+                    output = Path(temporary) / "rules"
+                    generator.update(output, FixtureFetch())
+                    before = snapshot(output)
+                    fetch = FixtureFetch()
+                    fetch.responses[failed_url] = generator.RuleError("fixture download failed")
+                    with self.assertRaises(generator.RuleError):
+                        generator.update(output, fetch)
+                    self.assertEqual(snapshot(output), before)
+                    self.assertEqual(fetch.calls[-1], failed_url)
+                    self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
+
+    def test_download_timeout_and_io_failure_preserve_existing_files(self):
+        failures = (subprocess.TimeoutExpired("fixture download", 1), OSError("fixture transport failure"))
+        for error in failures:
+            with self.subTest(error=type(error).__name__):
+                with tempfile.TemporaryDirectory() as temporary:
+                    output = Path(temporary) / "rules"
+                    generator.update(output, FixtureFetch())
+                    before = snapshot(output)
+                    fetch = FixtureFetch()
+                    fetch.responses[generator.KELEE_URL] = error
+                    with self.assertRaises(type(error)):
+                        generator.update(output, fetch)
+                    self.assertEqual(snapshot(output), before)
+
+    def test_actual_fetch_failure_at_each_source_preserves_existing_files(self):
+        for failed_url in FixtureFetch().responses:
+            with self.subTest(source=failed_url.rsplit("/", 1)[-1]):
+                with tempfile.TemporaryDirectory() as temporary:
+                    output = Path(temporary) / "rules"
+                    generator.update(output, FixtureFetch())
+                    before = snapshot(output)
+                    fetch = FixtureFetch()
+
+                    def download(command, **_kwargs):
+                        url = command[-1]
+                        content = fetch(url).encode("utf-8")
+                        return subprocess.CompletedProcess(
+                            command, 22 if url == failed_url else 0,
+                            stdout=content, stderr=b"fixture transport detail: example.invalid",
+                        )
+
+                    with patch.object(generator.subprocess, "run", side_effect=download):
+                        with self.assertRaises(generator.RuleError):
+                            generator.update(output, generator.fetch_text)
+                    self.assertEqual(fetch.calls[-1], failed_url)
+                    self.assertEqual(snapshot(output), before)
+                    self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
+
+    def test_validation_failure_preserves_every_destination_file(self):
+        invalid_sources = []
+        unknown = valid_sources()
+        unknown["kelee"] += "IP-ASN,64512,no-resolve\n"
+        invalid_sources.append(unknown)
+        missing = valid_sources()
+        missing["meta_claude"] = source_text(CLAUDE_CORE[1:])
+        invalid_sources.append(missing)
+        for source in valid_sources():
+            empty = valid_sources()
+            empty[source] = ""
+            invalid_sources.append(empty)
+        for index, sources in enumerate(invalid_sources):
+            with self.subTest(fixture=index):
+                with tempfile.TemporaryDirectory() as temporary:
+                    output = Path(temporary) / "rules"
+                    generator.update(output, FixtureFetch())
+                    before = snapshot(output)
+                    with self.assertRaises(generator.RuleError):
+                        generator.update(output, FixtureFetch(sources))
+                    self.assertEqual(snapshot(output), before)
+
+    def test_failed_first_generation_does_not_create_output_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "not-created" / "rules"
+            fetch = FixtureFetch()
+            fetch.responses[generator.KELEE_URL] = generator.RuleError("fixture download failed")
+            with self.assertRaises(generator.RuleError):
+                generator.update(output, fetch)
+            self.assertEqual(list(Path(temporary).iterdir()), [])
+
+    def test_staging_write_failure_preserves_all_three_existing_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            generator.update(output, FixtureFetch())
+            before = snapshot(output)
+            sources = valid_sources()
+            sources["kelee"] += "DOMAIN,new-supplement.example.invalid\n"
+            with patch.object(generator.os, "fsync", side_effect=[None, OSError("fixture staging write failed")]):
+                with patch.object(generator.os, "replace", wraps=generator.os.replace) as replace:
+                    with self.assertRaisesRegex(OSError, "fixture staging write failed"):
+                        generator.update(output, FixtureFetch(sources))
+                    replace.assert_not_called()
+            self.assertEqual(snapshot(output), before)
+            self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
+
+    def test_identical_generation_does_not_rewrite_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            first, _ = generator.update(output, FixtureFetch())
+            before = snapshot(output)
+            with patch.object(generator.os, "replace") as replace:
+                second, changed = generator.update(output, FixtureFetch())
+            self.assertFalse(changed)
+            self.assertEqual(first, second)
+            replace.assert_not_called()
+            self.assertEqual(snapshot(output), before)
+
+    def test_upstream_revision_and_comment_changes_do_not_rewrite_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            generator.update(output, FixtureFetch())
+            before = snapshot(output)
+            sources = {name: "# a new source comment\n" + source_text(reversed(text.splitlines()))
+                       for name, text in valid_sources().items()}
+            with patch.object(generator.os, "replace") as replace:
+                _, changed = generator.update(output, FixtureFetch(sources, NEXT_REVISION))
+            self.assertFalse(changed)
+            replace.assert_not_called()
+            self.assertEqual(snapshot(output), before)
+
+    def test_missing_artifact_is_repaired_as_a_complete_set(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            generator.update(output, FixtureFetch())
+            (output / "AI-Kelee.list").unlink()
+            _, changed = generator.update(output, FixtureFetch())
+            self.assertTrue(changed)
+            self.assertEqual({path.name for path in output.iterdir()}, set(generator.OUTPUT_NAMES))
+
+
+if __name__ == "__main__":
+    unittest.main()
