@@ -28,6 +28,13 @@ CLAUDE_CORE = (
     "DOMAIN,servd-anthropic-website.b-cdn.net",
     "DOMAIN,upstream-core.example.invalid",
 )
+CLAUDE_COMPATIBILITY_RULES = (
+    "DOMAIN,anthropic.auth0.com",
+    "DOMAIN,anthropic-com.ghost.io",
+    "DOMAIN,anthropic.com.cdn.cloudflare.net",
+    "DOMAIN-SUFFIX,sentry.io",
+    "DOMAIN-SUFFIX,statsigapi.net",
+)
 AI_CORE = (
     "DOMAIN-SUFFIX,chatgpt.com",
     "DOMAIN-SUFFIX,openai.com",
@@ -194,12 +201,43 @@ class ParseRuleTests(OfflineTestCase):
 
 
 class BuildRulesTests(OfflineTestCase):
-    def test_complete_claude_core_and_official_supplements_are_preserved(self):
+    def test_complete_claude_core_and_approved_supplements_are_preserved(self):
         built = generator.build_rules(**valid_sources())
         self.assertEqual(
             built["Claude.list"],
-            sorted(CLAUDE_CORE + ("DOMAIN-SUFFIX,claude.app",) + REVIEWED_NETWORKS),
+            sorted(CLAUDE_CORE + ("DOMAIN-SUFFIX,claude.app",)
+                   + REVIEWED_NETWORKS + CLAUDE_COMPATIBILITY_RULES),
         )
+
+    def test_shared_compatibility_suffixes_cover_subdomains_with_label_boundaries(self):
+        claude = generator.build_rules(**valid_sources())["Claude.list"]
+        for suffix in ("sentry.io", "statsigapi.net"):
+            for domain in (suffix, "fixture." + suffix, "nested.fixture." + suffix):
+                with self.subTest(domain=domain):
+                    self.assertTrue(generator.domain_matches(claude, domain))
+            for domain in ("not" + suffix, suffix + ".example.invalid", suffix.replace(".", "-")):
+                with self.subTest(domain=domain):
+                    self.assertFalse(generator.domain_matches(claude, domain))
+        for domain in ("sentry.i0", "statsigapi.ne", "statsigapi.com"):
+            with self.subTest(domain=domain):
+                self.assertFalse(generator.domain_matches(claude, domain))
+
+    def test_anthropic_external_hosts_are_exact_without_other_tenant_coverage(self):
+        claude = generator.build_rules(**valid_sources())["Claude.list"]
+        external_hosts = (
+            ("anthropic.auth0.com", "auth0.com", "fixture.auth0.com"),
+            ("anthropic-com.ghost.io", "ghost.io", "fixture.ghost.io"),
+            ("anthropic.com.cdn.cloudflare.net", "cloudflare.net", "fixture.cdn.cloudflare.net"),
+        )
+        for host, platform, other_tenant in external_hosts:
+            with self.subTest(host=host):
+                self.assertIn("DOMAIN," + host, claude)
+                self.assertNotIn("DOMAIN-SUFFIX," + host, claude)
+                self.assertTrue(generator.domain_matches(claude, host))
+            for domain in (platform, other_tenant, "child." + host, "not" + host,
+                           host + ".example.invalid"):
+                with self.subTest(domain=domain):
+                    self.assertFalse(generator.domain_matches(claude, domain))
 
     def test_claude_is_removed_from_meta_and_kelee(self):
         built = generator.build_rules(**valid_sources())
@@ -208,6 +246,52 @@ class BuildRulesTests(OfflineTestCase):
         for name in ("AI-Meta.list", "AI-Kelee.list"):
             with self.subTest(output=name):
                 self.assertTrue(set(built[name]).isdisjoint(built["Claude.list"]))
+
+    def test_compatibility_rules_and_subdomains_are_removed_from_meta_and_kelee(self):
+        baseline = generator.build_rules(**valid_sources())
+        covered = CLAUDE_COMPATIBILITY_RULES + (
+            "DOMAIN,fixture.sentry.io",
+            "DOMAIN,nested.fixture.sentry.io",
+            "DOMAIN-SUFFIX,fixture.sentry.io",
+            "DOMAIN,fixture.statsigapi.net",
+            "DOMAIN,nested.fixture.statsigapi.net",
+            "DOMAIN-SUFFIX,fixture.statsigapi.net",
+        )
+        for source in ("meta_ai", "kelee"):
+            with self.subTest(source=source):
+                sources = valid_sources()
+                sources[source] += source_text(covered)
+                self.assertEqual(generator.build_rules(**sources), baseline)
+
+    def test_compatibility_duplicates_in_all_sources_do_not_change_output(self):
+        sources = valid_sources()
+        repeated = {
+            name: text + source_text(CLAUDE_COMPATIBILITY_RULES * 3)
+            for name, text in sources.items()
+        }
+        self.assertEqual(generator.build_rules(**repeated), generator.build_rules(**sources))
+
+    def test_compatibility_deduplication_keeps_other_tenants_and_near_miss_hosts(self):
+        baseline = generator.build_rules(**valid_sources())
+        retained = (
+            "DOMAIN,fixture.auth0.com",
+            "DOMAIN,fixture.ghost.io",
+            "DOMAIN,fixture.cdn.cloudflare.net",
+            "DOMAIN,child.anthropic.auth0.com",
+            "DOMAIN,child.anthropic-com.ghost.io",
+            "DOMAIN,child.anthropic.com.cdn.cloudflare.net",
+            "DOMAIN,notsentry.io",
+            "DOMAIN,sentry.io.example.invalid",
+            "DOMAIN,notstatsigapi.net",
+            "DOMAIN,statsigapi.net.example.invalid",
+        )
+        for source, output in (("meta_ai", "AI-Meta.list"), ("kelee", "AI-Kelee.list")):
+            with self.subTest(source=source):
+                sources = valid_sources()
+                sources[source] += source_text(retained)
+                expected = dict(baseline)
+                expected[output] = sorted(baseline[output] + list(retained))
+                self.assertEqual(generator.build_rules(**sources), expected)
 
     def test_kelee_deduplication_respects_suffix_boundaries_and_exact_rules(self):
         sources = valid_sources()
@@ -221,13 +305,20 @@ class BuildRulesTests(OfflineTestCase):
         built = generator.build_rules(**sources)
         self.assertEqual(built["AI-Kelee.list"], sorted(KELEE_ADDITIONS + additions[:2]))
 
-    def test_plain_github_and_shared_telemetry_do_not_enter_claude(self):
-        for domain in sorted(generator.SHARED_INFRASTRUCTURE) + ["browser-intake-us5-datadoghq.com"]:
-            with self.subTest(domain=domain):
-                sources = valid_sources()
-                sources["meta_claude"] += f"DOMAIN-SUFFIX,{domain}\n"
-                with self.assertRaisesRegex(generator.RuleError, "shared (infrastructure|telemetry)"):
-                    generator.build_rules(**sources)
+    def test_unapproved_shared_platforms_and_telemetry_do_not_enter_claude(self):
+        blocked = (
+            "datadoghq.com", "datadoghq.eu", "sift.com", "siftscience.com",
+            "intercom.io", "intercomcdn.com", "cloudflare.com", "cloudflare.net",
+            "b-cdn.net", "auth0.com", "ghost.io", "usefathom.com", "github.com",
+            "githubusercontent.com", "googleapis.com", "browser-intake-us5-datadoghq.com",
+        )
+        for domain in blocked:
+            for kind in ("DOMAIN", "DOMAIN-SUFFIX"):
+                with self.subTest(domain=domain, kind=kind):
+                    sources = valid_sources()
+                    sources["meta_claude"] += f"{kind},{domain}\n"
+                    with self.assertRaisesRegex(generator.RuleError, "shared (infrastructure|telemetry)"):
+                        generator.build_rules(**sources)
 
     def test_unrelated_asn_is_rejected_in_every_source(self):
         for source in valid_sources():
@@ -527,6 +618,26 @@ class UpdateTests(OfflineTestCase):
                         self.assertIn("CC BY-NC-SA 4.0", text)
                     else:
                         self.assertIn(f"/{REVISION}/", text)
+                    if name == "Claude.list":
+                        self.assertIn("# Compatibility:", text)
+                        self.assertIn("https://github.com/lich13/loon-ai-rules#claude-compatibility", text)
+            self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
+
+    def test_regeneration_keeps_compatibility_rules_when_upstream_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            generator.update(output, FixtureFetch())
+            sources = valid_sources()
+            sources["meta_claude"] += "DOMAIN,refreshed-core.example.invalid\n"
+            _, changed = generator.update(output, FixtureFetch(sources, NEXT_REVISION))
+            self.assertTrue(changed)
+            text = (output / "Claude.list").read_text(encoding="utf-8")
+            body = text.split("\n\n", 1)[1].splitlines()
+            self.assertIn("DOMAIN,refreshed-core.example.invalid", body)
+            self.assertIn(f"/{NEXT_REVISION}/", text)
+            for rule in CLAUDE_COMPATIBILITY_RULES:
+                with self.subTest(rule=rule):
+                    self.assertEqual(body.count(rule), 1)
             self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
 
     def test_every_artifact_is_ready_before_the_first_destination_replacement(self):

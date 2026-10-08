@@ -26,6 +26,13 @@ CLAUDE_EXTRA = (
     "IP-CIDR,160.79.104.0/23,no-resolve",
     "IP-CIDR6,2607:6bc0::/48,no-resolve",
 )
+CLAUDE_COMPATIBILITY = (
+    "DOMAIN,anthropic.auth0.com",
+    "DOMAIN,anthropic-com.ghost.io",
+    "DOMAIN,anthropic.com.cdn.cloudflare.net",
+    "DOMAIN-SUFFIX,sentry.io",
+    "DOMAIN-SUFFIX,statsigapi.net",
+)
 SHARED_INFRASTRUCTURE = frozenset((
     "sentry.io", "statsigapi.net", "datadoghq.com", "datadoghq.eu",
     "sift.com", "siftscience.com", "intercom.io", "intercomcdn.com",
@@ -145,7 +152,10 @@ def build_rules(meta_ai, meta_claude, kelee):
     if not domain_matches(claude, "servd-anthropic-website.b-cdn.net"):
         raise RuleError("Anthropic source lost the website CDN")
     claude.update(CLAUDE_EXTRA)
+    claude.update(CLAUDE_COMPATIBILITY)
     for domain in SHARED_INFRASTRUCTURE:
+        if domain_matches(CLAUDE_COMPATIBILITY, domain):
+            continue
         if domain_matches(claude, domain) or domain_matches(claude, "unrelated." + domain):
             raise RuleError("Anthropic source includes shared infrastructure")
     # A named telemetry endpoint is also shared across tenants, not Claude-specific.
@@ -275,7 +285,9 @@ def render_artifacts(rules, commit):
             if name == "Claude.list":
                 headers += ["# Additions: Claude Desktop network requirements and official inbound IP ranges.",
                             "# https://code.claude.com/docs/en/desktop#network-access-requirements",
-                            "# https://platform.claude.com/docs/en/api/ip-addresses"]
+                            "# https://platform.claude.com/docs/en/api/ip-addresses",
+                            "# Compatibility: three exact Anthropic hosts; Sentry and Statsig domain suffixes.",
+                            "# https://github.com/lich13/loon-ai-rules#claude-compatibility"]
             else:
                 headers += ["# Change: remove Claude; use the audited Azure keyword + suffix compatibility rule."]
         headers += [f"# Rules: {len(lines)}", f"# Content SHA-256: {hashlib.sha256(body.encode()).hexdigest()}"]

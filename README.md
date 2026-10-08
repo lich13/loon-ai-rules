@@ -4,7 +4,7 @@
 
 | 文件 | 来源与用途 |
 | --- | --- |
-| `rules/Claude.list` | MetaCubeX Anthropic，加上官方桌面域名及 API 入口 IP |
+| `rules/Claude.list` | MetaCubeX Anthropic，加上官方桌面域名、API 入口 IP 及兼容域名 |
 | `rules/AI-Meta.list` | MetaCubeX 综合 AI，移除 Claude |
 | `rules/AI-Kelee.list` | 可莉 AI 中未被前两份规则覆盖的域名和兼容逻辑 |
 
@@ -25,7 +25,15 @@ python3 scripts/update_ai_rules.py
 
 当前唯一的 Azure 域名正则转换为限定关键词与 `webpubsub.azure.com` 后缀的 `AND` 规则，与可莉的 Loon 兼容写法一致；不承诺对任意正则做无损转换。新语法须先人工审查并增加测试。
 
-Claude 不按 Sentry、Datadog、Intercom 等共享服务的整个域名或无关 ASN 分类。官方入口 IP 来自 [Anthropic IP 文档](https://platform.claude.com/docs/en/api/ip-addresses)，桌面补充来自 [网络要求](https://code.claude.com/docs/en/desktop#network-access-requirements)。第三方网关按其域名分类，无法据此识别一次请求具体使用哪个模型。
+官方入口 IP 来自 [Anthropic IP 文档](https://platform.claude.com/docs/en/api/ip-addresses)，桌面补充来自 [网络要求](https://code.claude.com/docs/en/desktop#network-access-requirements)。第三方网关按其域名分类，无法据此识别一次请求具体使用哪个模型。
+
+<a id="claude-compatibility"></a>
+
+## Claude 兼容域名
+
+Claude 规则另外精确匹配 `anthropic.auth0.com`、`anthropic-com.ghost.io`、`anthropic.com.cdn.cloudflare.net`，并匹配 `sentry.io`、`statsigapi.net` 及其子域名。后两项是共享服务，其他应用访问这些域名时也会使用 Claude 策略。
+
+这些补充由独立生成器保留，不通过规则同步 App 管理。Auth0、Ghost、Cloudflare 的其他域名，以及 Datadog、Sift、Intercom、Fathom 等共享平台，不因本次兼容补充整体归入 Claude；也不按无关 ASN 分类。
 
 ## 来源
 
