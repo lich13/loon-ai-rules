@@ -26,7 +26,8 @@ jobs:
       - name: Test conversion and failure handling
         run: python3 -m unittest discover -s scripts -p 'test_ai_rules.py' -v
       - name: Install compatible public-source transport
-        run: python3 -m pip install --only-binary=:all: curl_cffi==0.16.3
+        run: |
+          python3 -m pip install --only-binary=:all: curl_cffi==0.16.3
       - name: Download and validate all public sources
         run: python3 scripts/update_ai_rules.py --browser-tls
       - name: Publish the complete rule set
