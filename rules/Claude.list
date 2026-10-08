@@ -6,9 +6,14 @@
 # Additions: Claude Desktop network requirements and official inbound IP ranges.
 # https://code.claude.com/docs/en/desktop#network-access-requirements
 # https://platform.claude.com/docs/en/api/ip-addresses
-# Rules: 12
-# Content SHA-256: b1e7499adb8fd8df24b5820e86295dfa5d54d7b1845c20a2fc2ad152fe060eaf
+# Compatibility: three exact Anthropic hosts; Sentry and Statsig domain suffixes.
+# https://github.com/lich13/loon-ai-rules#claude-compatibility
+# Rules: 17
+# Content SHA-256: 5b88b8798ca589bd52aedbe174e0e3d3b7b6806cf774c5436889aa8c5f392e57
 
+DOMAIN,anthropic-com.ghost.io
+DOMAIN,anthropic.auth0.com
+DOMAIN,anthropic.com.cdn.cloudflare.net
 DOMAIN,servd-anthropic-website.b-cdn.net
 DOMAIN-SUFFIX,anthropic.com
 DOMAIN-SUFFIX,clau.de
@@ -19,5 +24,7 @@ DOMAIN-SUFFIX,claude.dev
 DOMAIN-SUFFIX,claudemcpclient.com
 DOMAIN-SUFFIX,claudemcpcontent.com
 DOMAIN-SUFFIX,claudeusercontent.com
+DOMAIN-SUFFIX,sentry.io
+DOMAIN-SUFFIX,statsigapi.net
 IP-CIDR,160.79.104.0/23,no-resolve
 IP-CIDR6,2607:6bc0::/48,no-resolve

@@ -4,8 +4,8 @@
 # Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE
 # https://github.com/v2fly/domain-list-community/blob/master/LICENSE
 # Change: remove Claude; use the audited Azure keyword + suffix compatibility rule.
-# Rules: 180
-# Content SHA-256: 722799e057d1b9d2f16011cd59c7ab16dcf1cc53543599bdb221baec3898a83a
+# Rules: 179
+# Content SHA-256: 8b6eab9bcc2943e2397ba0ddefd4ae0825e9edf43d6f49119e2c6b6b13cbf217
 
 AND,((DOMAIN-KEYWORD,chatgpt-async-webps-prod-),(DOMAIN-SUFFIX,webpubsub.azure.com))
 DOMAIN,ai.google.dev
@@ -26,7 +26,6 @@ DOMAIN,geminiweb-pa.clients.google.com
 DOMAIN,geminiweb-pa.clients6.google.com
 DOMAIN,notebooklm-pa.googleapis.com
 DOMAIN,notebooklm.googleapis.com
-DOMAIN,o33249.ingest.sentry.io
 DOMAIN,openai.qualtrics.com
 DOMAIN,openaiapi-site.azureedge.net
 DOMAIN,openaiassets.blob.core.windows.net
