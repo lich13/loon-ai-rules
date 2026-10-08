@@ -175,14 +175,20 @@ def fetch_text(url):
         if url == KELEE_URL else "loon-ai-rules/1"
     )
     result = subprocess.run(
-        ["curl", "--fail", "--silent", "--show-error", "--location",
+        ["curl", "--fail-with-body", "--silent", "--show-error", "--location",
          "--connect-timeout", "15", "--max-time", "60", "--max-filesize", "2000000",
          "--user-agent", user_agent, url],
         capture_output=True, timeout=70,
     )
     if result.returncode:
         source = "Kelee" if url == KELEE_URL else "MetaCubeX"
-        raise RuleError(f"{source}: public upstream download failed (curl {result.returncode})")
+        details = [f"curl {result.returncode}"]
+        status = re.search(rb"error:\s*(\d{3})\b", result.stderr)
+        if status:
+            details.append("HTTP " + status.group(1).decode("ascii"))
+        if b"/cdn-cgi/challenge-platform" in result.stdout or b"cf-chl-" in result.stdout:
+            details.append("browser challenge")
+        raise RuleError(f"{source}: public upstream download failed ({', '.join(details)})")
     try:
         return result.stdout.decode("utf-8")
     except UnicodeDecodeError as error:
