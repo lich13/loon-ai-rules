@@ -1,11 +1,11 @@
 # Public routing rules for Loon and mihomo. Generated; do not edit.
-# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/32bbb6c45c63a491c571f98cd9d863d7fd6771dc/geo/geosite/classical/category-ai-!cn.list
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/dad29637471fad8f29e85fdcee6a67d08ee5a779/geo/geosite/classical/category-ai-!cn.list
 # Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.
 # Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE
 # https://github.com/v2fly/domain-list-community/blob/master/LICENSE
 # Change: remove Claude; use the audited Azure keyword + suffix compatibility rule.
-# Rules: 179
-# Content SHA-256: 8b6eab9bcc2943e2397ba0ddefd4ae0825e9edf43d6f49119e2c6b6b13cbf217
+# Rules: 180
+# Content SHA-256: 8b5d45f090b40720a314c27d286082225311b47c82aa690cba347cc9b316f75f
 
 AND,((DOMAIN-KEYWORD,chatgpt-async-webps-prod-),(DOMAIN-SUFFIX,webpubsub.azure.com))
 DOMAIN,ai.google.dev
@@ -174,6 +174,7 @@ DOMAIN-SUFFIX,sider.ai
 DOMAIN-SUFFIX,sora.com
 DOMAIN-SUFFIX,spicywriter.com
 DOMAIN-SUFFIX,stitch.withgoogle.com
+DOMAIN-SUFFIX,syntx.ai
 DOMAIN-SUFFIX,talkai.info
 DOMAIN-SUFFIX,tapnow.ai
 DOMAIN-SUFFIX,themeforest.net
