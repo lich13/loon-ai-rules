@@ -879,7 +879,7 @@ class UpdateTests(OfflineTestCase):
                 generator.update(output, fetch)
             self.assertEqual(list(Path(temporary).iterdir()), [])
 
-    def test_staging_write_failure_preserves_all_three_existing_files(self):
+    def test_staging_write_failure_preserves_all_four_existing_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "rules"
             generator.update(output, FixtureFetch())
