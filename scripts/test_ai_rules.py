@@ -45,6 +45,28 @@ AI_CORE = (
 AI_SYNTHETIC = tuple(
     f"DOMAIN-SUFFIX,provider-{number}.example.invalid" for number in range(7)
 )
+XAI_CORE = (
+    "DOMAIN-SUFFIX,grok.com",
+    "DOMAIN-SUFFIX,grokipedia.com",
+    "DOMAIN-SUFFIX,x.ai",
+    "DOMAIN-SUFFIX,grok.x.com",
+)
+CURSOR_CORE = (
+    "DOMAIN-SUFFIX,cursor-cdn.com",
+    "DOMAIN-SUFFIX,cursor.com",
+    "DOMAIN-SUFFIX,cursor.sh",
+    "DOMAIN-SUFFIX,cursorapi.com",
+)
+XAI_EXTRA = (
+    "DOMAIN-SUFFIX,cursorvm.com",
+    "DOMAIN-SUFFIX,grokusercontent.com",
+    "DOMAIN,accounts.spacex.ai",
+    "DOMAIN,anysphere-binaries.s3.us-east-1.amazonaws.com",
+)
+KELEE_XAI_FALLBACKS = (
+    "DOMAIN,api.grokusercontent.com",
+    "DOMAIN,api.cursorvm.com",
+)
 REVIEWED_NETWORKS = tuple(
     rule for rule in generator.CLAUDE_EXTRA if rule.startswith(("IP-CIDR,", "IP-CIDR6,"))
 )
@@ -61,18 +83,25 @@ def source_text(lines):
 def valid_sources():
     """Independent public service expectations plus synthetic deduplication cases."""
     claude = source_text(CLAUDE_CORE)
-    ai = source_text(AI_CORE + AI_SYNTHETIC + CLAUDE_CORE + (
+    ai = source_text(AI_CORE + AI_SYNTHETIC + XAI_CORE + CURSOR_CORE + CLAUDE_CORE + (
         "DOMAIN,api.anthropic.com",
         "DOMAIN,download.claude.app",
         "DOMAIN,api.provider-0.example.invalid",
         "DOMAIN-SUFFIX,child.provider-0.example.invalid",
     ) + REVIEWED_NETWORKS)
-    kelee = ai + source_text(KELEE_ADDITIONS + (
+    kelee = ai + source_text(KELEE_ADDITIONS + KELEE_XAI_FALLBACKS + (
         "DOMAIN,api.supplement.example.invalid",
         "DOMAIN-SUFFIX,child.supplement.example.invalid",
         "DOMAIN,standalone.example.invalid",
+        "DOMAIN,api.github.com",
     ))
-    return {"meta_ai": ai, "meta_claude": claude, "kelee": kelee}
+    return {
+        "meta_ai": ai,
+        "meta_claude": claude,
+        "meta_xai": source_text(XAI_CORE),
+        "meta_cursor": source_text(CURSOR_CORE),
+        "kelee": kelee,
+    }
 
 
 class FixtureFetch:
@@ -83,6 +112,8 @@ class FixtureFetch:
             generator.META_HEAD: json.dumps({"sha": revision}),
             f"{base}/category-ai-!cn.list": self.sources["meta_ai"],
             f"{base}/anthropic.list": self.sources["meta_claude"],
+            f"{base}/xai.list": self.sources["meta_xai"],
+            f"{base}/cursor.list": self.sources["meta_cursor"],
             generator.KELEE_URL: self.sources["kelee"],
         }
         self.calls = []
@@ -209,6 +240,95 @@ class BuildRulesTests(OfflineTestCase):
                    + REVIEWED_NETWORKS + CLAUDE_COMPATIBILITY_RULES),
         )
 
+    def test_xai_has_four_meta_suffixes_and_four_approved_additions(self):
+        built = generator.build_rules(**valid_sources())
+        self.assertEqual(built["Xai.list"], sorted(XAI_CORE + CURSOR_CORE + XAI_EXTRA))
+        self.assertEqual(len(built["Xai.list"]), 12)
+        self.assertEqual(len(set(built["Xai.list"])), 12)
+
+    def test_xai_and_cursor_suffixes_match_multiple_subdomain_levels(self):
+        xai = generator.build_rules(**valid_sources())["Xai.list"]
+        for suffix in tuple(rule.split(",", 1)[1] for rule in XAI_CORE + CURSOR_CORE) + (
+            "cursorvm.com", "grokusercontent.com",
+        ):
+            for domain in (suffix, "fixture." + suffix, "nested.fixture." + suffix):
+                with self.subTest(domain=domain):
+                    self.assertTrue(generator.domain_matches(xai, domain))
+            for domain in ("not" + suffix, suffix + ".example.invalid", suffix.replace(".", "-")):
+                with self.subTest(domain=domain):
+                    self.assertFalse(generator.domain_matches(xai, domain))
+
+    def test_xai_exact_external_hosts_do_not_expand_to_other_tenants(self):
+        xai = generator.build_rules(**valid_sources())["Xai.list"]
+        exact_hosts = (
+            ("accounts.spacex.ai", ("spacex.ai", "other.spacex.ai", "child.accounts.spacex.ai",
+                                     "notaccounts.spacex.ai")),
+            ("anysphere-binaries.s3.us-east-1.amazonaws.com",
+             ("amazonaws.com", "s3.us-east-1.amazonaws.com", "other.s3.us-east-1.amazonaws.com",
+              "other-binaries.s3.us-east-1.amazonaws.com",
+              "anysphere-binaries.s3.us-east-2.amazonaws.com",
+              "child.anysphere-binaries.s3.us-east-1.amazonaws.com")),
+        )
+        for host, other_tenants in exact_hosts:
+            with self.subTest(host=host):
+                self.assertIn("DOMAIN," + host, xai)
+                self.assertNotIn("DOMAIN-SUFFIX," + host, xai)
+                self.assertTrue(generator.domain_matches(xai, host))
+            for domain in other_tenants:
+                with self.subTest(domain=domain):
+                    self.assertFalse(generator.domain_matches(xai, domain))
+
+    def test_xai_does_not_import_github_claude_or_unrelated_rules_from_other_sources(self):
+        built = generator.build_rules(**valid_sources())
+        xai = built["Xai.list"]
+        for domain in (
+            "api.github.com", "claude.com", "anthropic.com", "provider-0.example.invalid",
+            "supplement.example.invalid",
+        ):
+            with self.subTest(domain=domain):
+                self.assertFalse(generator.domain_matches(xai, domain))
+        for domain in ("api.grokusercontent.com", "api.cursorvm.com"):
+            with self.subTest(domain=domain):
+                self.assertTrue(generator.domain_matches(xai, domain))
+        self.assertTrue(generator.domain_matches(built["AI-Kelee.list"], "api.github.com"))
+        for rule in XAI_CORE + CURSOR_CORE:
+            self.assertIn(rule, built["AI-Meta.list"])
+        for rule in KELEE_XAI_FALLBACKS:
+            self.assertIn(rule, built["AI-Kelee.list"])
+
+    def test_xai_rejects_shared_infrastructure_github_and_other_provider_domains(self):
+        blocked = tuple(generator.SHARED_INFRASTRUCTURE) + tuple(generator.CLAUDE_SUFFIXES) + (
+            "github.com", "x.com", "twitter.com", "claude.app", "spacex.ai", "amazonaws.com",
+            "s3.us-east-1.amazonaws.com", "chatgpt.com", "openai.com", "google.com",
+        )
+        for source in ("meta_xai", "meta_cursor"):
+            for domain in blocked:
+                with self.subTest(source=source, domain=domain):
+                    sources = valid_sources()
+                    sources[source] += f"DOMAIN-SUFFIX,{domain}\n"
+                    with self.assertRaisesRegex(generator.RuleError, "Xai source includes unrelated"):
+                        generator.build_rules(**sources)
+
+    def test_xai_sources_require_each_core_domain_as_a_suffix_rule(self):
+        for source, core in (("meta_xai", XAI_CORE), ("meta_cursor", CURSOR_CORE)):
+            for line in core:
+                with self.subTest(source=source, rule=line):
+                    sources = valid_sources()
+                    sources[source] = source_text(item for item in core if item != line) + line.replace(
+                        "DOMAIN-SUFFIX,", "DOMAIN,"
+                    ) + "\n"
+                    with self.assertRaisesRegex(generator.RuleError, "source lost required domains"):
+                        generator.build_rules(**sources)
+
+    def test_xai_core_domains_are_individually_required(self):
+        for source, core in (("meta_xai", XAI_CORE), ("meta_cursor", CURSOR_CORE)):
+            for line in core:
+                with self.subTest(source=source, rule=line):
+                    sources = valid_sources()
+                    sources[source] = source_text(item for item in core if item != line)
+                    with self.assertRaisesRegex(generator.RuleError, "source lost required domains"):
+                        generator.build_rules(**sources)
+
     def test_shared_compatibility_suffixes_cover_subdomains_with_label_boundaries(self):
         claude = generator.build_rules(**valid_sources())["Claude.list"]
         for suffix in ("sentry.io", "statsigapi.net"):
@@ -241,8 +361,8 @@ class BuildRulesTests(OfflineTestCase):
 
     def test_claude_is_removed_from_meta_and_kelee(self):
         built = generator.build_rules(**valid_sources())
-        self.assertEqual(built["AI-Meta.list"], sorted(AI_CORE + AI_SYNTHETIC))
-        self.assertEqual(built["AI-Kelee.list"], sorted(KELEE_ADDITIONS))
+        self.assertEqual(built["AI-Meta.list"], sorted(AI_CORE + AI_SYNTHETIC + XAI_CORE + CURSOR_CORE))
+        self.assertEqual(built["AI-Kelee.list"], sorted(KELEE_ADDITIONS + KELEE_XAI_FALLBACKS + ("DOMAIN,api.github.com",)))
         for name in ("AI-Meta.list", "AI-Kelee.list"):
             with self.subTest(output=name):
                 self.assertTrue(set(built[name]).isdisjoint(built["Claude.list"]))
@@ -265,10 +385,9 @@ class BuildRulesTests(OfflineTestCase):
 
     def test_compatibility_duplicates_in_all_sources_do_not_change_output(self):
         sources = valid_sources()
-        repeated = {
-            name: text + source_text(CLAUDE_COMPATIBILITY_RULES * 3)
-            for name, text in sources.items()
-        }
+        repeated = dict(sources)
+        for name in ("meta_ai", "meta_claude", "kelee"):
+            repeated[name] += source_text(CLAUDE_COMPATIBILITY_RULES * 3)
         self.assertEqual(generator.build_rules(**repeated), generator.build_rules(**sources))
 
     def test_compatibility_deduplication_keeps_other_tenants_and_near_miss_hosts(self):
@@ -303,7 +422,10 @@ class BuildRulesTests(OfflineTestCase):
         )
         sources["kelee"] += source_text(additions)
         built = generator.build_rules(**sources)
-        self.assertEqual(built["AI-Kelee.list"], sorted(KELEE_ADDITIONS + additions[:2]))
+        self.assertEqual(
+            built["AI-Kelee.list"],
+            sorted(KELEE_ADDITIONS + KELEE_XAI_FALLBACKS + ("DOMAIN,api.github.com",) + additions[:2]),
+        )
 
     def test_unapproved_shared_platforms_and_telemetry_do_not_enter_claude(self):
         blocked = (
@@ -576,14 +698,14 @@ class BrowserTlsTests(OfflineTestCase):
 
 
 class FetchSourcesTests(OfflineTestCase):
-    def test_both_meta_files_are_pinned_to_the_same_single_head_lookup(self):
+    def test_all_four_meta_files_are_pinned_to_the_same_single_head_lookup(self):
         fetch = FixtureFetch()
         sources, revision = generator.fetch_sources(fetch)
         self.assertEqual(revision, REVISION)
         self.assertEqual(sources, valid_sources())
         self.assertEqual(fetch.calls, list(fetch.responses))
         self.assertEqual(fetch.calls.count(generator.META_HEAD), 1)
-        self.assertTrue(all(f"/{REVISION}/" in url for url in fetch.calls[1:3]))
+        self.assertTrue(all(f"/{REVISION}/" in url for url in fetch.calls[1:5]))
 
     def test_invalid_revision_responses_stop_before_rule_downloads(self):
         invalid = ("not json", "{}", "null", "[]", '{"sha": null}', '{"sha": 7}',
@@ -598,12 +720,12 @@ class FetchSourcesTests(OfflineTestCase):
 
 
 class UpdateTests(OfflineTestCase):
-    def test_all_three_files_have_the_validated_rules_and_matching_metadata(self):
+    def test_all_four_files_have_the_validated_rules_and_matching_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "rules"
             rules, changed = generator.update(output, FixtureFetch())
             self.assertTrue(changed)
-            self.assertEqual(set(path.name for path in output.iterdir()), {"Claude.list", "AI-Meta.list", "AI-Kelee.list"})
+            self.assertEqual(set(path.name for path in output.iterdir()), set(generator.OUTPUT_NAMES))
             for name, lines in rules.items():
                 with self.subTest(output=name):
                     text = (output / name).read_text(encoding="utf-8")
@@ -616,6 +738,9 @@ class UpdateTests(OfflineTestCase):
                     if name == "AI-Kelee.list":
                         self.assertIn(generator.KELEE_URL, text)
                         self.assertIn("CC BY-NC-SA 4.0", text)
+                    elif name == "Xai.list":
+                        self.assertIn(f"/{REVISION}/geo/geosite/classical/xai.list", text)
+                        self.assertIn(f"/{REVISION}/geo/geosite/classical/cursor.list", text)
                     else:
                         self.assertIn(f"/{REVISION}/", text)
                     if name == "Claude.list":
@@ -719,9 +844,18 @@ class UpdateTests(OfflineTestCase):
         unknown = valid_sources()
         unknown["kelee"] += "IP-ASN,64512,no-resolve\n"
         invalid_sources.append(unknown)
+        unknown_xai = valid_sources()
+        unknown_xai["meta_xai"] += "IP-ASN,64512,no-resolve\n"
+        invalid_sources.append(unknown_xai)
         missing = valid_sources()
         missing["meta_claude"] = source_text(CLAUDE_CORE[1:])
         invalid_sources.append(missing)
+        missing_xai = valid_sources()
+        missing_xai["meta_xai"] = source_text(XAI_CORE[:-1])
+        invalid_sources.append(missing_xai)
+        missing_cursor = valid_sources()
+        missing_cursor["meta_cursor"] = source_text(CURSOR_CORE[:-1])
+        invalid_sources.append(missing_cursor)
         for source in valid_sources():
             empty = valid_sources()
             empty[source] = ""

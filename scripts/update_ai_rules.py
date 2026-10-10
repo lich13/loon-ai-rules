@@ -33,6 +33,14 @@ CLAUDE_COMPATIBILITY = (
     "DOMAIN-SUFFIX,sentry.io",
     "DOMAIN-SUFFIX,statsigapi.net",
 )
+XAI_SUFFIXES = frozenset(("grok.com", "grokipedia.com", "x.ai", "grok.x.com"))
+CURSOR_SUFFIXES = frozenset(("cursor-cdn.com", "cursor.com", "cursor.sh", "cursorapi.com"))
+XAI_EXTRA = (
+    "DOMAIN-SUFFIX,cursorvm.com",
+    "DOMAIN-SUFFIX,grokusercontent.com",
+    "DOMAIN,accounts.spacex.ai",
+    "DOMAIN,anysphere-binaries.s3.us-east-1.amazonaws.com",
+)
 SHARED_INFRASTRUCTURE = frozenset((
     "sentry.io", "statsigapi.net", "datadoghq.com", "datadoghq.eu",
     "sift.com", "siftscience.com", "intercom.io", "intercomcdn.com",
@@ -45,7 +53,7 @@ ALLOWED_CONJUNCTIONS = frozenset((
     ("openaicom-api-", "azurefd.net"),
     ("antigravity-auto-updater-", "run.app"),
 ))
-OUTPUT_NAMES = ("Claude.list", "AI-Meta.list", "AI-Kelee.list")
+OUTPUT_NAMES = ("Claude.list", "Xai.list", "AI-Meta.list", "AI-Kelee.list")
 DOMAIN_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
 
 
@@ -141,10 +149,28 @@ def domain_matches(rules, domain):
     return False
 
 
-def build_rules(meta_ai, meta_claude, kelee):
+def build_rules(meta_ai, meta_claude, kelee, meta_xai, meta_cursor):
     ai = parse_rules(meta_ai, "Meta AI")
     claude = parse_rules(meta_claude, "Meta Anthropic")
     extra = parse_rules(kelee, "Kelee AI")
+    xai = set()
+    for text, source, required in (
+        (meta_xai, "Meta xAI", XAI_SUFFIXES),
+        (meta_cursor, "Meta Cursor", CURSOR_SUFFIXES),
+    ):
+        service = parse_rules(text, source)
+        if any(not rule.startswith(("DOMAIN,", "DOMAIN-SUFFIX,")) for rule in service):
+            raise RuleError(f"{source}: upstream must contain domain rules only")
+        if not all(f"DOMAIN-SUFFIX,{domain}" in service for domain in required):
+            raise RuleError(f"{source}: source lost required domains")
+        xai.update(service)
+    xai.update(XAI_EXTRA)
+    for domain in SHARED_INFRASTRUCTURE | CLAUDE_SUFFIXES | {
+        "claude.app", "x.com", "twitter.com", "spacex.ai", "amazonaws.com",
+        "s3.us-east-1.amazonaws.com", "chatgpt.com", "openai.com", "google.com",
+    }:
+        if domain_matches(xai, domain) or domain_matches(xai, "unrelated." + domain):
+            raise RuleError("Xai source includes unrelated services or shared infrastructure")
     if any(not rule.startswith(("DOMAIN,", "DOMAIN-SUFFIX,")) for rule in claude):
         raise RuleError("Anthropic upstream must contain domain rules only")
     if not all(domain_matches(claude, domain) for domain in CLAUDE_SUFFIXES):
@@ -174,6 +200,7 @@ def build_rules(meta_ai, meta_claude, kelee):
         raise RuleError("AI rules include the entire GitHub site")
     return {
         "Claude.list": compact_rules(claude),
+        "Xai.list": compact_rules(xai),
         "AI-Meta.list": sorted(ai),
         "AI-Kelee.list": sorted(extra),
     }
@@ -260,6 +287,8 @@ def fetch_sources(fetch=fetch_text):
     sources = {
         "meta_ai": fetch(f"{base}/category-ai-!cn.list"),
         "meta_claude": fetch(f"{base}/anthropic.list"),
+        "meta_xai": fetch(f"{base}/xai.list"),
+        "meta_cursor": fetch(f"{base}/cursor.list"),
         "kelee": fetch(KELEE_URL),
     }
     return sources, commit
@@ -277,9 +306,11 @@ def render_artifacts(rules, commit):
                         "# License: https://github.com/luestr/ProxyResource/blob/main/LICENSE",
                         "# Change: normalize grammar; remove Claude and Meta-covered entries."]
         else:
-            upstream = "anthropic" if name == "Claude.list" else "category-ai-!cn"
-            headers += [f"# Source: {META_RAW}/{commit}/geo/geosite/classical/{upstream}.list",
-                        "# Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.",
+            upstreams = {"Claude.list": ("anthropic",), "Xai.list": ("xai", "cursor"),
+                         "AI-Meta.list": ("category-ai-!cn",)}[name]
+            headers += [f"# Source: {META_RAW}/{commit}/geo/geosite/classical/{upstream}.list"
+                        for upstream in upstreams]
+            headers += ["# Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.",
                         "# Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE",
                         "# https://github.com/v2fly/domain-list-community/blob/master/LICENSE"]
             if name == "Claude.list":
@@ -288,6 +319,10 @@ def render_artifacts(rules, commit):
                             "# https://platform.claude.com/docs/en/api/ip-addresses",
                             "# Compatibility: three exact Anthropic hosts; Sentry and Statsig domain suffixes.",
                             "# https://github.com/lich13/loon-ai-rules#claude-compatibility"]
+            elif name == "Xai.list":
+                headers += ["# Additions: Cursor hosted computers, Grok content, exact sign-in and download hosts.",
+                            "# https://prod.cursor.com/help/troubleshooting/sign-in-domains",
+                            "# https://prod.cursor.com/docs/enterprise/network-configuration"]
             else:
                 headers += ["# Change: remove Claude; use the audited Azure keyword + suffix compatibility rule."]
         headers += [f"# Rules: {len(lines)}", f"# Content SHA-256: {hashlib.sha256(body.encode()).hexdigest()}"]
@@ -318,7 +353,7 @@ def update(output_dir, fetch=fetch_text):
                 os.fsync(stream.fileno())
         for name in OUTPUT_NAMES:
             os.replace(Path(scratch) / name, output_dir / name)
-    # The workflow publishes all three validated files in one Git commit.
+    # The workflow publishes all validated files in one Git commit.
     return rules, True
 
 
