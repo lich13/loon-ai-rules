@@ -33,12 +33,9 @@ CLAUDE_COMPATIBILITY = (
     "DOMAIN-SUFFIX,sentry.io",
     "DOMAIN-SUFFIX,statsigapi.net",
 )
-XAI_SUFFIXES = frozenset(("grok.com", "grokipedia.com", "x.ai", "grok.x.com"))
 CURSOR_SUFFIXES = frozenset(("cursor-cdn.com", "cursor.com", "cursor.sh", "cursorapi.com"))
-XAI_EXTRA = (
+CURSOR_EXTRA = (
     "DOMAIN-SUFFIX,cursorvm.com",
-    "DOMAIN-SUFFIX,grokusercontent.com",
-    "DOMAIN,accounts.spacex.ai",
     "DOMAIN,anysphere-binaries.s3.us-east-1.amazonaws.com",
 )
 SHARED_INFRASTRUCTURE = frozenset((
@@ -53,7 +50,7 @@ ALLOWED_CONJUNCTIONS = frozenset((
     ("openaicom-api-", "azurefd.net"),
     ("antigravity-auto-updater-", "run.app"),
 ))
-OUTPUT_NAMES = ("Claude.list", "Xai.list", "AI-Meta.list", "AI-Kelee.list")
+OUTPUT_NAMES = ("Claude.list", "Cursor.list", "AI-Meta.list", "AI-Kelee.list")
 DOMAIN_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
 
 
@@ -149,28 +146,23 @@ def domain_matches(rules, domain):
     return False
 
 
-def build_rules(meta_ai, meta_claude, kelee, meta_xai, meta_cursor):
+def build_rules(meta_ai, meta_claude, kelee, meta_cursor):
     ai = parse_rules(meta_ai, "Meta AI")
     claude = parse_rules(meta_claude, "Meta Anthropic")
     extra = parse_rules(kelee, "Kelee AI")
-    xai = set()
-    for text, source, required in (
-        (meta_xai, "Meta xAI", XAI_SUFFIXES),
-        (meta_cursor, "Meta Cursor", CURSOR_SUFFIXES),
-    ):
-        service = parse_rules(text, source)
-        if any(not rule.startswith(("DOMAIN,", "DOMAIN-SUFFIX,")) for rule in service):
-            raise RuleError(f"{source}: upstream must contain domain rules only")
-        if not all(f"DOMAIN-SUFFIX,{domain}" in service for domain in required):
-            raise RuleError(f"{source}: source lost required domains")
-        xai.update(service)
-    xai.update(XAI_EXTRA)
+    cursor = parse_rules(meta_cursor, "Meta Cursor")
+    if any(not rule.startswith(("DOMAIN,", "DOMAIN-SUFFIX,")) for rule in cursor):
+        raise RuleError("Meta Cursor: upstream must contain domain rules only")
+    if not all(f"DOMAIN-SUFFIX,{domain}" in cursor for domain in CURSOR_SUFFIXES):
+        raise RuleError("Meta Cursor: source lost required domains")
+    cursor.update(CURSOR_EXTRA)
     for domain in SHARED_INFRASTRUCTURE | CLAUDE_SUFFIXES | {
         "claude.app", "x.com", "twitter.com", "spacex.ai", "amazonaws.com",
         "s3.us-east-1.amazonaws.com", "chatgpt.com", "openai.com", "google.com",
+        "grok.com", "x.ai", "grokipedia.com", "grokusercontent.com",
     }:
-        if domain_matches(xai, domain) or domain_matches(xai, "unrelated." + domain):
-            raise RuleError("Xai source includes unrelated services or shared infrastructure")
+        if domain_matches(cursor, domain) or domain_matches(cursor, "unrelated." + domain):
+            raise RuleError("Cursor source includes unrelated services or shared infrastructure")
     if any(not rule.startswith(("DOMAIN,", "DOMAIN-SUFFIX,")) for rule in claude):
         raise RuleError("Anthropic upstream must contain domain rules only")
     if not all(domain_matches(claude, domain) for domain in CLAUDE_SUFFIXES):
@@ -200,7 +192,7 @@ def build_rules(meta_ai, meta_claude, kelee, meta_xai, meta_cursor):
         raise RuleError("AI rules include the entire GitHub site")
     return {
         "Claude.list": compact_rules(claude),
-        "Xai.list": compact_rules(xai),
+        "Cursor.list": compact_rules(cursor),
         "AI-Meta.list": sorted(ai),
         "AI-Kelee.list": sorted(extra),
     }
@@ -287,7 +279,6 @@ def fetch_sources(fetch=fetch_text):
     sources = {
         "meta_ai": fetch(f"{base}/category-ai-!cn.list"),
         "meta_claude": fetch(f"{base}/anthropic.list"),
-        "meta_xai": fetch(f"{base}/xai.list"),
         "meta_cursor": fetch(f"{base}/cursor.list"),
         "kelee": fetch(KELEE_URL),
     }
@@ -306,7 +297,7 @@ def render_artifacts(rules, commit):
                         "# License: https://github.com/luestr/ProxyResource/blob/main/LICENSE",
                         "# Change: normalize grammar; remove Claude and Meta-covered entries."]
         else:
-            upstreams = {"Claude.list": ("anthropic",), "Xai.list": ("xai", "cursor"),
+            upstreams = {"Claude.list": ("anthropic",), "Cursor.list": ("cursor",),
                          "AI-Meta.list": ("category-ai-!cn",)}[name]
             headers += [f"# Source: {META_RAW}/{commit}/geo/geosite/classical/{upstream}.list"
                         for upstream in upstreams]
@@ -319,8 +310,8 @@ def render_artifacts(rules, commit):
                             "# https://platform.claude.com/docs/en/api/ip-addresses",
                             "# Compatibility: three exact Anthropic hosts; Sentry and Statsig domain suffixes.",
                             "# https://github.com/lich13/loon-ai-rules#claude-compatibility"]
-            elif name == "Xai.list":
-                headers += ["# Additions: Cursor hosted computers, Grok content, exact sign-in and download hosts.",
+            elif name == "Cursor.list":
+                headers += ["# Additions: Cursor hosted computers and exact download host.",
                             "# https://prod.cursor.com/help/troubleshooting/sign-in-domains",
                             "# https://prod.cursor.com/docs/enterprise/network-configuration"]
             else:

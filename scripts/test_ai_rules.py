@@ -57,10 +57,8 @@ CURSOR_CORE = (
     "DOMAIN-SUFFIX,cursor.sh",
     "DOMAIN-SUFFIX,cursorapi.com",
 )
-XAI_EXTRA = (
+CURSOR_EXTRA = (
     "DOMAIN-SUFFIX,cursorvm.com",
-    "DOMAIN-SUFFIX,grokusercontent.com",
-    "DOMAIN,accounts.spacex.ai",
     "DOMAIN,anysphere-binaries.s3.us-east-1.amazonaws.com",
 )
 KELEE_XAI_FALLBACKS = (
@@ -98,7 +96,6 @@ def valid_sources():
     return {
         "meta_ai": ai,
         "meta_claude": claude,
-        "meta_xai": source_text(XAI_CORE),
         "meta_cursor": source_text(CURSOR_CORE),
         "kelee": kelee,
     }
@@ -112,7 +109,6 @@ class FixtureFetch:
             generator.META_HEAD: json.dumps({"sha": revision}),
             f"{base}/category-ai-!cn.list": self.sources["meta_ai"],
             f"{base}/anthropic.list": self.sources["meta_claude"],
-            f"{base}/xai.list": self.sources["meta_xai"],
             f"{base}/cursor.list": self.sources["meta_cursor"],
             generator.KELEE_URL: self.sources["kelee"],
         }
@@ -240,77 +236,70 @@ class BuildRulesTests(OfflineTestCase):
                    + REVIEWED_NETWORKS + CLAUDE_COMPATIBILITY_RULES),
         )
 
-    def test_xai_has_four_meta_suffixes_and_four_approved_additions(self):
+    def test_cursor_has_four_meta_suffixes_and_two_approved_additions(self):
         built = generator.build_rules(**valid_sources())
-        self.assertEqual(built["Xai.list"], sorted(XAI_CORE + CURSOR_CORE + XAI_EXTRA))
-        self.assertEqual(len(built["Xai.list"]), 12)
-        self.assertEqual(len(set(built["Xai.list"])), 12)
+        self.assertEqual(built["Cursor.list"], sorted(CURSOR_CORE + CURSOR_EXTRA))
+        self.assertEqual(len(built["Cursor.list"]), 6)
+        self.assertEqual(len(set(built["Cursor.list"])), 6)
 
-    def test_xai_and_cursor_suffixes_match_multiple_subdomain_levels(self):
-        xai = generator.build_rules(**valid_sources())["Xai.list"]
-        for suffix in tuple(rule.split(",", 1)[1] for rule in XAI_CORE + CURSOR_CORE) + (
-            "cursorvm.com", "grokusercontent.com",
-        ):
+    def test_cursor_suffixes_match_multiple_subdomain_levels(self):
+        cursor = generator.build_rules(**valid_sources())["Cursor.list"]
+        for suffix in tuple(rule.split(",", 1)[1] for rule in CURSOR_CORE) + ("cursorvm.com",):
             for domain in (suffix, "fixture." + suffix, "nested.fixture." + suffix):
                 with self.subTest(domain=domain):
-                    self.assertTrue(generator.domain_matches(xai, domain))
+                    self.assertTrue(generator.domain_matches(cursor, domain))
             for domain in ("not" + suffix, suffix + ".example.invalid", suffix.replace(".", "-")):
                 with self.subTest(domain=domain):
-                    self.assertFalse(generator.domain_matches(xai, domain))
+                    self.assertFalse(generator.domain_matches(cursor, domain))
 
-    def test_xai_exact_external_hosts_do_not_expand_to_other_tenants(self):
-        xai = generator.build_rules(**valid_sources())["Xai.list"]
-        exact_hosts = (
-            ("accounts.spacex.ai", ("spacex.ai", "other.spacex.ai", "child.accounts.spacex.ai",
-                                     "notaccounts.spacex.ai")),
-            ("anysphere-binaries.s3.us-east-1.amazonaws.com",
-             ("amazonaws.com", "s3.us-east-1.amazonaws.com", "other.s3.us-east-1.amazonaws.com",
-              "other-binaries.s3.us-east-1.amazonaws.com",
-              "anysphere-binaries.s3.us-east-2.amazonaws.com",
-              "child.anysphere-binaries.s3.us-east-1.amazonaws.com")),
+    def test_cursor_exact_download_host_does_not_expand_to_other_tenants(self):
+        cursor = generator.build_rules(**valid_sources())["Cursor.list"]
+        host = "anysphere-binaries.s3.us-east-1.amazonaws.com"
+        other_tenants = (
+            "amazonaws.com", "s3.us-east-1.amazonaws.com", "other.s3.us-east-1.amazonaws.com",
+            "other-binaries.s3.us-east-1.amazonaws.com",
+            "anysphere-binaries.s3.us-east-2.amazonaws.com",
+            "child.anysphere-binaries.s3.us-east-1.amazonaws.com",
         )
-        for host, other_tenants in exact_hosts:
-            with self.subTest(host=host):
-                self.assertIn("DOMAIN," + host, xai)
-                self.assertNotIn("DOMAIN-SUFFIX," + host, xai)
-                self.assertTrue(generator.domain_matches(xai, host))
-            for domain in other_tenants:
-                with self.subTest(domain=domain):
-                    self.assertFalse(generator.domain_matches(xai, domain))
+        self.assertIn("DOMAIN," + host, cursor)
+        self.assertNotIn("DOMAIN-SUFFIX," + host, cursor)
+        self.assertTrue(generator.domain_matches(cursor, host))
+        for domain in other_tenants:
+            with self.subTest(domain=domain):
+                self.assertFalse(generator.domain_matches(cursor, domain))
 
-    def test_xai_does_not_import_github_claude_or_unrelated_rules_from_other_sources(self):
+    def test_cursor_does_not_import_github_claude_xai_or_unrelated_rules(self):
         built = generator.build_rules(**valid_sources())
-        xai = built["Xai.list"]
+        cursor = built["Cursor.list"]
         for domain in (
             "api.github.com", "claude.com", "anthropic.com", "provider-0.example.invalid",
-            "supplement.example.invalid",
+            "supplement.example.invalid", "grok.com", "x.ai", "api.grokusercontent.com",
         ):
             with self.subTest(domain=domain):
-                self.assertFalse(generator.domain_matches(xai, domain))
-        for domain in ("api.grokusercontent.com", "api.cursorvm.com"):
-            with self.subTest(domain=domain):
-                self.assertTrue(generator.domain_matches(xai, domain))
+                self.assertFalse(generator.domain_matches(cursor, domain))
+        self.assertTrue(generator.domain_matches(cursor, "api.cursorvm.com"))
         self.assertTrue(generator.domain_matches(built["AI-Kelee.list"], "api.github.com"))
         for rule in XAI_CORE + CURSOR_CORE:
             self.assertIn(rule, built["AI-Meta.list"])
         for rule in KELEE_XAI_FALLBACKS:
             self.assertIn(rule, built["AI-Kelee.list"])
 
-    def test_xai_rejects_shared_infrastructure_github_and_other_provider_domains(self):
+    def test_cursor_rejects_shared_infrastructure_github_and_other_provider_domains(self):
         blocked = tuple(generator.SHARED_INFRASTRUCTURE) + tuple(generator.CLAUDE_SUFFIXES) + (
             "github.com", "x.com", "twitter.com", "claude.app", "spacex.ai", "amazonaws.com",
             "s3.us-east-1.amazonaws.com", "chatgpt.com", "openai.com", "google.com",
+            "grok.com", "x.ai", "grokipedia.com", "grokusercontent.com",
         )
-        for source in ("meta_xai", "meta_cursor"):
+        for source in ("meta_cursor",):
             for domain in blocked:
                 with self.subTest(source=source, domain=domain):
                     sources = valid_sources()
                     sources[source] += f"DOMAIN-SUFFIX,{domain}\n"
-                    with self.assertRaisesRegex(generator.RuleError, "Xai source includes unrelated"):
+                    with self.assertRaisesRegex(generator.RuleError, "Cursor source includes unrelated"):
                         generator.build_rules(**sources)
 
-    def test_xai_sources_require_each_core_domain_as_a_suffix_rule(self):
-        for source, core in (("meta_xai", XAI_CORE), ("meta_cursor", CURSOR_CORE)):
+    def test_cursor_sources_require_each_core_domain_as_a_suffix_rule(self):
+        for source, core in (("meta_cursor", CURSOR_CORE),):
             for line in core:
                 with self.subTest(source=source, rule=line):
                     sources = valid_sources()
@@ -320,8 +309,8 @@ class BuildRulesTests(OfflineTestCase):
                     with self.assertRaisesRegex(generator.RuleError, "source lost required domains"):
                         generator.build_rules(**sources)
 
-    def test_xai_core_domains_are_individually_required(self):
-        for source, core in (("meta_xai", XAI_CORE), ("meta_cursor", CURSOR_CORE)):
+    def test_cursor_core_domains_are_individually_required(self):
+        for source, core in (("meta_cursor", CURSOR_CORE),):
             for line in core:
                 with self.subTest(source=source, rule=line):
                     sources = valid_sources()
@@ -698,14 +687,15 @@ class BrowserTlsTests(OfflineTestCase):
 
 
 class FetchSourcesTests(OfflineTestCase):
-    def test_all_four_meta_files_are_pinned_to_the_same_single_head_lookup(self):
+    def test_all_three_meta_files_are_pinned_to_the_same_single_head_lookup(self):
         fetch = FixtureFetch()
         sources, revision = generator.fetch_sources(fetch)
         self.assertEqual(revision, REVISION)
         self.assertEqual(sources, valid_sources())
         self.assertEqual(fetch.calls, list(fetch.responses))
         self.assertEqual(fetch.calls.count(generator.META_HEAD), 1)
-        self.assertTrue(all(f"/{REVISION}/" in url for url in fetch.calls[1:5]))
+        self.assertTrue(all(f"/{REVISION}/" in url for url in fetch.calls[1:4]))
+        self.assertEqual(fetch.calls[4], generator.KELEE_URL)
 
     def test_invalid_revision_responses_stop_before_rule_downloads(self):
         invalid = ("not json", "{}", "null", "[]", '{"sha": null}', '{"sha": 7}',
@@ -738,9 +728,9 @@ class UpdateTests(OfflineTestCase):
                     if name == "AI-Kelee.list":
                         self.assertIn(generator.KELEE_URL, text)
                         self.assertIn("CC BY-NC-SA 4.0", text)
-                    elif name == "Xai.list":
-                        self.assertIn(f"/{REVISION}/geo/geosite/classical/xai.list", text)
+                    elif name == "Cursor.list":
                         self.assertIn(f"/{REVISION}/geo/geosite/classical/cursor.list", text)
+                        self.assertNotIn("/xai.list", text)
                     else:
                         self.assertIn(f"/{REVISION}/", text)
                     if name == "Claude.list":
@@ -844,15 +834,12 @@ class UpdateTests(OfflineTestCase):
         unknown = valid_sources()
         unknown["kelee"] += "IP-ASN,64512,no-resolve\n"
         invalid_sources.append(unknown)
-        unknown_xai = valid_sources()
-        unknown_xai["meta_xai"] += "IP-ASN,64512,no-resolve\n"
-        invalid_sources.append(unknown_xai)
+        unknown_cursor = valid_sources()
+        unknown_cursor["meta_cursor"] += "IP-ASN,64512,no-resolve\n"
+        invalid_sources.append(unknown_cursor)
         missing = valid_sources()
         missing["meta_claude"] = source_text(CLAUDE_CORE[1:])
         invalid_sources.append(missing)
-        missing_xai = valid_sources()
-        missing_xai["meta_xai"] = source_text(XAI_CORE[:-1])
-        invalid_sources.append(missing_xai)
         missing_cursor = valid_sources()
         missing_cursor["meta_cursor"] = source_text(CURSOR_CORE[:-1])
         invalid_sources.append(missing_cursor)
