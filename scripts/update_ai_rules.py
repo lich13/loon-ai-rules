@@ -50,7 +50,7 @@ ALLOWED_CONJUNCTIONS = frozenset((
     ("openaicom-api-", "azurefd.net"),
     ("antigravity-auto-updater-", "run.app"),
 ))
-OUTPUT_NAMES = ("Claude.list", "Cursor.list", "AI-Meta.list", "AI-Kelee.list")
+OUTPUT_NAMES = ("Cursor.list", "AI-Meta.list", "AI-Kelee.list")
 DOMAIN_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
 
 
@@ -179,19 +179,25 @@ def build_rules(meta_ai, meta_claude, kelee, meta_cursor):
     # A named telemetry endpoint is also shared across tenants, not Claude-specific.
     if domain_matches(claude, "browser-intake-us5-datadoghq.com"):
         raise RuleError("Anthropic source includes shared telemetry")
-    ai = set(compact_rules(rule for rule in ai if not covered_by(rule, claude)))
-    extra = set(compact_rules(rule for rule in extra if not covered_by(rule, claude | ai)))
+    # Guard Meta AI body size before merge so Claude alone cannot mask an empty AI source.
+    ai_base = set(compact_rules(rule for rule in ai if not covered_by(rule, claude)))
+    if len(ai_base) < 10:
+        raise RuleError("incomplete AI sources")
+    # Merge Anthropic/Claude (core + extras + compatibility) into the AI服务-bound AI-Meta output.
+    ai = set(compact_rules(ai | claude))
+    extra = set(compact_rules(rule for rule in extra if not covered_by(rule, ai)))
     if not all(domain_matches(ai, domain) for domain in (
         "chatgpt.com", "api.openai.com", "gemini.google.com", "openrouter.ai",
         "copilot-proxy.githubusercontent.com",
     )):
         raise RuleError("Meta AI source lost required services")
-    if len(ai) < 10 or not extra:
+    if not all(domain_matches(ai, domain) for domain in CLAUDE_SUFFIXES):
+        raise RuleError("AI-Meta lost required Claude domains after merge")
+    if not extra:
         raise RuleError("incomplete AI sources")
     if domain_matches(ai | extra, "github.com"):
         raise RuleError("AI rules include the entire GitHub site")
     return {
-        "Claude.list": compact_rules(claude),
         "Cursor.list": compact_rules(cursor),
         "AI-Meta.list": sorted(ai),
         "AI-Kelee.list": sorted(extra),
@@ -295,27 +301,26 @@ def render_artifacts(rules, commit):
             headers += [f"# Source: {KELEE_URL}",
                         "# Attribution: iKeLee / luestr/ProxyResource; CC BY-NC-SA 4.0.",
                         "# License: https://github.com/luestr/ProxyResource/blob/main/LICENSE",
-                        "# Change: normalize grammar; remove Claude and Meta-covered entries."]
+                        "# Change: normalize grammar; remove Meta-covered entries (Claude merged into AI-Meta)."]
         else:
-            upstreams = {"Claude.list": ("anthropic",), "Cursor.list": ("cursor",),
-                         "AI-Meta.list": ("category-ai-!cn",)}[name]
+            upstreams = {"Cursor.list": ("cursor",),
+                         "AI-Meta.list": ("category-ai-!cn", "anthropic")}[name]
             headers += [f"# Source: {META_RAW}/{commit}/geo/geosite/classical/{upstream}.list"
                         for upstream in upstreams]
             headers += ["# Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.",
                         "# Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE",
                         "# https://github.com/v2fly/domain-list-community/blob/master/LICENSE"]
-            if name == "Claude.list":
-                headers += ["# Additions: Claude Desktop network requirements and official inbound IP ranges.",
-                            "# https://code.claude.com/docs/en/desktop#network-access-requirements",
-                            "# https://platform.claude.com/docs/en/api/ip-addresses",
-                            "# Compatibility: three exact Anthropic hosts; Sentry and Statsig domain suffixes.",
-                            "# https://github.com/lich13/loon-ai-rules#claude-compatibility"]
-            elif name == "Cursor.list":
+            if name == "Cursor.list":
                 headers += ["# Additions: Cursor hosted computers and exact download host.",
                             "# https://prod.cursor.com/help/troubleshooting/sign-in-domains",
                             "# https://prod.cursor.com/docs/enterprise/network-configuration"]
             else:
-                headers += ["# Change: remove Claude; use the audited Azure keyword + suffix compatibility rule."]
+                headers += ["# Additions: merge Anthropic/Claude (desktop network, official IP ranges, compatibility).",
+                            "# https://code.claude.com/docs/en/desktop#network-access-requirements",
+                            "# https://platform.claude.com/docs/en/api/ip-addresses",
+                            "# Compatibility: three exact Anthropic hosts; Sentry and Statsig domain suffixes.",
+                            "# https://github.com/lich13/loon-ai-rules#claude-compatibility",
+                            "# Change: use the audited Azure keyword + suffix compatibility rule."]
         headers += [f"# Rules: {len(lines)}", f"# Content SHA-256: {hashlib.sha256(body.encode()).hexdigest()}"]
         result[name] = "\n".join(headers) + "\n\n" + body
     return result
@@ -330,8 +335,13 @@ def update(output_dir, fetch=fetch_text):
     rules = build_rules(**sources)
     artifacts = render_artifacts(rules, commit)
     output_dir = Path(output_dir)
-    if all((output_dir / name).is_file() and semantic_body((output_dir / name).read_text()) == semantic_body(text)
-           for name, text in artifacts.items()):
+    obsolete = ("Claude.list",)
+    up_to_date = all(
+        (output_dir / name).is_file() and semantic_body((output_dir / name).read_text()) == semantic_body(text)
+        for name, text in artifacts.items()
+    )
+    obsolete_present = any((output_dir / name).is_file() for name in obsolete)
+    if up_to_date and not obsolete_present:
         return rules, False
     # No destination writes occur until every download, conversion and guard succeeds.
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -344,6 +354,10 @@ def update(output_dir, fetch=fetch_text):
                 os.fsync(stream.fileno())
         for name in OUTPUT_NAMES:
             os.replace(Path(scratch) / name, output_dir / name)
+    for name in obsolete:
+        stale = output_dir / name
+        if stale.is_file():
+            stale.unlink()
     # The workflow publishes all validated files in one Git commit.
     return rules, True
 

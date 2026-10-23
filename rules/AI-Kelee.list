@@ -2,7 +2,7 @@
 # Source: https://kelee.one/Tool/Loon/Lsr/AI.lsr
 # Attribution: iKeLee / luestr/ProxyResource; CC BY-NC-SA 4.0.
 # License: https://github.com/luestr/ProxyResource/blob/main/LICENSE
-# Change: normalize grammar; remove Claude and Meta-covered entries.
+# Change: normalize grammar; remove Meta-covered entries (Claude merged into AI-Meta).
 # Rules: 161
 # Content SHA-256: 9f7d5c35fe6c2be6d24bd49dee3990712e60048e2d22bb20e38001ef35e87a24
 

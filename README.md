@@ -1,21 +1,20 @@
 # AI 路由规则
 
-供 Loon 与 mihomo 使用的通用规则，Claude、Cursor 与其他 AI 服务分别选择策略。这里不保存客户端配置、订阅地址、节点或凭据。
+供 Loon 与 mihomo 使用的通用规则。Claude/Anthropic 已并入综合 AI（AI服务），Cursor 仍单独选择策略。这里不保存客户端配置、订阅地址、节点或凭据。
 
 | 文件 | 来源与用途 |
 | --- | --- |
-| `rules/Claude.list` | MetaCubeX Anthropic，加上官方桌面域名、API 入口 IP 及兼容域名 |
 | `rules/Cursor.list` | MetaCubeX Cursor，加上官方登录和下载域名 |
-| `rules/AI-Meta.list` | MetaCubeX 综合 AI，移除 Claude |
-| `rules/AI-Kelee.list` | 可莉 AI 中未被 Claude、AI-Meta 覆盖的域名和兼容逻辑 |
+| `rules/AI-Meta.list` | MetaCubeX 综合 AI，并入 Anthropic/Claude（桌面域名、API 入口 IP 及兼容域名） |
+| `rules/AI-Kelee.list` | 可莉 AI 中未被 AI-Meta 覆盖的域名和兼容逻辑 |
 
-客户端依次匹配 Claude、Cursor、AI-Meta、AI-Kelee，再匹配 GitHub 等一般网站规则与直连兜底。mihomo 使用 `behavior: classical`、`format: text`；Loon 使用远程规则。规则中没有策略名称，由各客户端配置指定。
+客户端依次匹配 Cursor、AI-Meta、AI-Kelee，再匹配 GitHub 等一般网站规则与直连兜底。mihomo 使用 `behavior: classical`、`format: text`；Loon 使用远程规则。规则中没有策略名称，由各客户端配置指定（综合 AI 产物绑定 AI服务）。
 
-`Cursor.list` 只覆盖 Cursor 服务域名。Grok / xAI 走综合 AI 产物（AI-Meta / AI-Kelee）。Cursor 内终端、GitHub 和第三方 API 请求仍按各自目标域名分类。
+`Cursor.list` 只覆盖 Cursor 服务域名。Grok / xAI 与 Claude / Anthropic 均走综合 AI 产物（AI-Meta / AI-Kelee → AI服务）。Cursor 内终端、GitHub 和第三方 API 请求仍按各自目标域名分类。
 
 ## 更新
 
-GitHub Actions 每天北京时间 10:30 取源并校验，也可手动运行。MetaCubeX 的三个输入固定到同一提交，全部源验证成功后一次发布四份产物。下载失败、空源、关键域名缺失或未知语法会阻止更新，保留已发布版本。内容未变时不产生提交。
+GitHub Actions 每天北京时间 10:30 取源并校验，也可手动运行。MetaCubeX 的三个输入固定到同一提交，全部源验证成功后一次发布三份产物。下载失败、空源、关键域名缺失或未知语法会阻止更新，保留已发布版本。内容未变时不产生提交。
 
 可莉的 Loon 规则入口使用 Loon `User-Agent`。CI 还通过固定版本 `curl_cffi` 使用 Safari iOS 的 TLS 参数，以处理普通 Linux curl 遇到的浏览器校验；只对可莉入口启用。HTTP 错误、校验页和不合法规则仍会停止发布。
 
@@ -32,11 +31,11 @@ python3 scripts/update_ai_rules.py
 
 <a id="claude-compatibility"></a>
 
-## Claude 兼容域名
+## Claude 兼容域名（并入 AI-Meta）
 
-Claude 规则另外精确匹配 `anthropic.auth0.com`、`anthropic-com.ghost.io`、`anthropic.com.cdn.cloudflare.net`，并匹配 `sentry.io`、`statsigapi.net` 及其子域名。后两项是共享服务，其他应用访问这些域名时也会使用 Claude 策略。
+AI-Meta 另外精确匹配 `anthropic.auth0.com`、`anthropic-com.ghost.io`、`anthropic.com.cdn.cloudflare.net`，并匹配 `sentry.io`、`statsigapi.net` 及其子域名。后两项是共享服务，其他应用访问这些域名时也会使用 AI服务 策略。
 
-这些补充由独立生成器保留，不通过规则同步 App 管理。Auth0、Ghost、Cloudflare 的其他域名，以及 Datadog、Sift、Intercom、Fathom 等共享平台，不因本次兼容补充整体归入 Claude；也不按无关 ASN 分类。
+这些补充由独立生成器保留，不通过规则同步 App 管理。Auth0、Ghost、Cloudflare 的其他域名，以及 Datadog、Sift、Intercom、Fathom 等共享平台，不因本次兼容补充整体归入 AI；也不按无关 ASN 分类。
 
 ## Cursor 补充域名
 

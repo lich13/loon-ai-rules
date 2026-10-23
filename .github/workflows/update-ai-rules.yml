@@ -33,7 +33,8 @@ jobs:
       - name: Publish the complete rule set
         run: |
           set -euo pipefail
-          git add -- rules/Claude.list rules/Cursor.list rules/AI-Meta.list rules/AI-Kelee.list
+          git add -- rules/Cursor.list rules/AI-Meta.list rules/AI-Kelee.list
+          if [ -f rules/Claude.list ]; then git rm -f -- rules/Claude.list; fi
           if git diff --cached --quiet; then
             echo "Rules are unchanged."
             exit 0

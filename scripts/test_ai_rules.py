@@ -228,13 +228,13 @@ class ParseRuleTests(OfflineTestCase):
 
 
 class BuildRulesTests(OfflineTestCase):
-    def test_complete_claude_core_and_approved_supplements_are_preserved(self):
+    def test_complete_claude_core_and_approved_supplements_are_merged_into_ai_meta(self):
         built = generator.build_rules(**valid_sources())
-        self.assertEqual(
-            built["Claude.list"],
-            sorted(CLAUDE_CORE + ("DOMAIN-SUFFIX,claude.app",)
-                   + REVIEWED_NETWORKS + CLAUDE_COMPATIBILITY_RULES),
-        )
+        ai_meta = built["AI-Meta.list"]
+        for rule in CLAUDE_CORE + ("DOMAIN-SUFFIX,claude.app",) + REVIEWED_NETWORKS + CLAUDE_COMPATIBILITY_RULES:
+            with self.subTest(rule=rule):
+                self.assertIn(rule, ai_meta)
+        self.assertNotIn("Claude.list", built)
 
     def test_cursor_has_four_meta_suffixes_and_two_approved_additions(self):
         built = generator.build_rules(**valid_sources())
@@ -319,20 +319,20 @@ class BuildRulesTests(OfflineTestCase):
                         generator.build_rules(**sources)
 
     def test_shared_compatibility_suffixes_cover_subdomains_with_label_boundaries(self):
-        claude = generator.build_rules(**valid_sources())["Claude.list"]
+        ai_meta = generator.build_rules(**valid_sources())["AI-Meta.list"]
         for suffix in ("sentry.io", "statsigapi.net"):
             for domain in (suffix, "fixture." + suffix, "nested.fixture." + suffix):
                 with self.subTest(domain=domain):
-                    self.assertTrue(generator.domain_matches(claude, domain))
+                    self.assertTrue(generator.domain_matches(ai_meta, domain))
             for domain in ("not" + suffix, suffix + ".example.invalid", suffix.replace(".", "-")):
                 with self.subTest(domain=domain):
-                    self.assertFalse(generator.domain_matches(claude, domain))
+                    self.assertFalse(generator.domain_matches(ai_meta, domain))
         for domain in ("sentry.i0", "statsigapi.ne", "statsigapi.com"):
             with self.subTest(domain=domain):
-                self.assertFalse(generator.domain_matches(claude, domain))
+                self.assertFalse(generator.domain_matches(ai_meta, domain))
 
     def test_anthropic_external_hosts_are_exact_without_other_tenant_coverage(self):
-        claude = generator.build_rules(**valid_sources())["Claude.list"]
+        ai_meta = generator.build_rules(**valid_sources())["AI-Meta.list"]
         external_hosts = (
             ("anthropic.auth0.com", "auth0.com", "fixture.auth0.com"),
             ("anthropic-com.ghost.io", "ghost.io", "fixture.ghost.io"),
@@ -340,23 +340,28 @@ class BuildRulesTests(OfflineTestCase):
         )
         for host, platform, other_tenant in external_hosts:
             with self.subTest(host=host):
-                self.assertIn("DOMAIN," + host, claude)
-                self.assertNotIn("DOMAIN-SUFFIX," + host, claude)
-                self.assertTrue(generator.domain_matches(claude, host))
+                self.assertIn("DOMAIN," + host, ai_meta)
+                self.assertNotIn("DOMAIN-SUFFIX," + host, ai_meta)
+                self.assertTrue(generator.domain_matches(ai_meta, host))
             for domain in (platform, other_tenant, "child." + host, "not" + host,
                            host + ".example.invalid"):
                 with self.subTest(domain=domain):
-                    self.assertFalse(generator.domain_matches(claude, domain))
+                    self.assertFalse(generator.domain_matches(ai_meta, domain))
 
-    def test_claude_is_removed_from_meta_and_kelee(self):
+    def test_claude_is_merged_into_ai_meta_and_deduped_from_kelee(self):
         built = generator.build_rules(**valid_sources())
-        self.assertEqual(built["AI-Meta.list"], sorted(AI_CORE + AI_SYNTHETIC + XAI_CORE + CURSOR_CORE))
+        expected_claude = set(CLAUDE_CORE + ("DOMAIN-SUFFIX,claude.app",)
+                              + REVIEWED_NETWORKS + CLAUDE_COMPATIBILITY_RULES)
+        self.assertEqual(
+            built["AI-Meta.list"],
+            sorted(set(AI_CORE + AI_SYNTHETIC + XAI_CORE + CURSOR_CORE) | expected_claude),
+        )
         self.assertEqual(built["AI-Kelee.list"], sorted(KELEE_ADDITIONS + KELEE_XAI_FALLBACKS + ("DOMAIN,api.github.com",)))
-        for name in ("AI-Meta.list", "AI-Kelee.list"):
-            with self.subTest(output=name):
-                self.assertTrue(set(built[name]).isdisjoint(built["Claude.list"]))
+        self.assertTrue(expected_claude.issubset(built["AI-Meta.list"]))
+        self.assertTrue(expected_claude.isdisjoint(built["AI-Kelee.list"]))
+        self.assertNotIn("Claude.list", built)
 
-    def test_compatibility_rules_and_subdomains_are_removed_from_meta_and_kelee(self):
+    def test_compatibility_rules_and_subdomains_are_deduped_into_ai_meta(self):
         baseline = generator.build_rules(**valid_sources())
         covered = CLAUDE_COMPATIBILITY_RULES + (
             "DOMAIN,fixture.sentry.io",
@@ -710,12 +715,13 @@ class FetchSourcesTests(OfflineTestCase):
 
 
 class UpdateTests(OfflineTestCase):
-    def test_all_four_files_have_the_validated_rules_and_matching_metadata(self):
+    def test_all_three_files_have_the_validated_rules_and_matching_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "rules"
             rules, changed = generator.update(output, FixtureFetch())
             self.assertTrue(changed)
             self.assertEqual(set(path.name for path in output.iterdir()), set(generator.OUTPUT_NAMES))
+            self.assertNotIn("Claude.list", {path.name for path in output.iterdir()})
             for name, lines in rules.items():
                 with self.subTest(output=name):
                     text = (output / name).read_text(encoding="utf-8")
@@ -733,7 +739,7 @@ class UpdateTests(OfflineTestCase):
                         self.assertNotIn("/xai.list", text)
                     else:
                         self.assertIn(f"/{REVISION}/", text)
-                    if name == "Claude.list":
+                        self.assertIn("/anthropic.list", text)
                         self.assertIn("# Compatibility:", text)
                         self.assertIn("https://github.com/lich13/loon-ai-rules#claude-compatibility", text)
             self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
@@ -746,13 +752,15 @@ class UpdateTests(OfflineTestCase):
             sources["meta_claude"] += "DOMAIN,refreshed-core.example.invalid\n"
             _, changed = generator.update(output, FixtureFetch(sources, NEXT_REVISION))
             self.assertTrue(changed)
-            text = (output / "Claude.list").read_text(encoding="utf-8")
+            text = (output / "AI-Meta.list").read_text(encoding="utf-8")
             body = text.split("\n\n", 1)[1].splitlines()
             self.assertIn("DOMAIN,refreshed-core.example.invalid", body)
             self.assertIn(f"/{NEXT_REVISION}/", text)
+            self.assertIn("/anthropic.list", text)
             for rule in CLAUDE_COMPATIBILITY_RULES:
                 with self.subTest(rule=rule):
                     self.assertEqual(body.count(rule), 1)
+            self.assertFalse((output / "Claude.list").exists())
             self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
 
     def test_every_artifact_is_ready_before_the_first_destination_replacement(self):
@@ -866,7 +874,7 @@ class UpdateTests(OfflineTestCase):
                 generator.update(output, fetch)
             self.assertEqual(list(Path(temporary).iterdir()), [])
 
-    def test_staging_write_failure_preserves_all_four_existing_files(self):
+    def test_staging_write_failure_preserves_all_three_existing_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "rules"
             generator.update(output, FixtureFetch())
@@ -913,6 +921,18 @@ class UpdateTests(OfflineTestCase):
             (output / "AI-Kelee.list").unlink()
             _, changed = generator.update(output, FixtureFetch())
             self.assertTrue(changed)
+            self.assertEqual({path.name for path in output.iterdir()}, set(generator.OUTPUT_NAMES))
+
+    def test_obsolete_claude_list_is_removed_on_update(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            generator.update(output, FixtureFetch())
+            stale = output / "Claude.list"
+            stale.write_text("# obsolete fixture\nDOMAIN,stale.example.invalid\n", encoding="utf-8")
+            self.assertTrue(stale.is_file())
+            _, changed = generator.update(output, FixtureFetch())
+            self.assertTrue(changed)
+            self.assertFalse(stale.exists())
             self.assertEqual({path.name for path in output.iterdir()}, set(generator.OUTPUT_NAMES))
 
 

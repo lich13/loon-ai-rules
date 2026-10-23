@@ -1,16 +1,25 @@
 # Public routing rules for Loon and mihomo. Generated; do not edit.
-# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/5b62abd872efea28a44ee1ec0dc3869cff27c739/geo/geosite/classical/category-ai-!cn.list
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/c8c1a27018377ec8a7f60c320efb3023681909eb/geo/geosite/classical/category-ai-!cn.list
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/c8c1a27018377ec8a7f60c320efb3023681909eb/geo/geosite/classical/anthropic.list
 # Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.
 # Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE
 # https://github.com/v2fly/domain-list-community/blob/master/LICENSE
-# Change: remove Claude; use the audited Azure keyword + suffix compatibility rule.
-# Rules: 184
-# Content SHA-256: f60f65032e08409bc0af26e6db2b74edf728667b77af9fd673668fee46bd9e4d
+# Additions: merge Anthropic/Claude (desktop network, official IP ranges, compatibility).
+# https://code.claude.com/docs/en/desktop#network-access-requirements
+# https://platform.claude.com/docs/en/api/ip-addresses
+# Compatibility: three exact Anthropic hosts; Sentry and Statsig domain suffixes.
+# https://github.com/lich13/loon-ai-rules#claude-compatibility
+# Change: use the audited Azure keyword + suffix compatibility rule.
+# Rules: 210
+# Content SHA-256: 6cbf9f8b0409458dc0a53a241eb183fcee744f4fa405b2bb465918a8263aec87
 
 AND,((DOMAIN-KEYWORD,chatgpt-async-webps-prod-),(DOMAIN-SUFFIX,webpubsub.azure.com))
 DOMAIN,ai.google.dev
 DOMAIN,alkalicore-pa.clients6.google.com
 DOMAIN,alkalimakersuite-pa.clients6.google.com
+DOMAIN,anthropic-com.ghost.io
+DOMAIN,anthropic.auth0.com
+DOMAIN,anthropic.com.cdn.cloudflare.net
 DOMAIN,antigravity-pa.googleapis.com
 DOMAIN,antigravity.googleapis.com
 DOMAIN,browser-intake-datadoghq.com
@@ -35,6 +44,7 @@ DOMAIN,openaicomproductionae4b.blob.core.windows.net
 DOMAIN,ppl-ai-file-upload.s3.amazonaws.com
 DOMAIN,pplx-res.cloudinary.com
 DOMAIN,production-openaicom-storage.azureedge.net
+DOMAIN,servd-anthropic-website.b-cdn.net
 DOMAIN,webchannel-alkalimakersuite-pa.clients6.google.com
 DOMAIN-SUFFIX,agentclientprotocol.com
 DOMAIN-SUFFIX,ai.studio
@@ -42,13 +52,18 @@ DOMAIN-SUFFIX,aicode.googleapis.com
 DOMAIN-SUFFIX,aida.googleapis.com
 DOMAIN-SUFFIX,aisandbox-pa.googleapis.com
 DOMAIN-SUFFIX,aistudio.google.com
+DOMAIN-SUFFIX,ant.dev
+DOMAIN-SUFFIX,anthropic.com
+DOMAIN-SUFFIX,anthropic.team
 DOMAIN-SUFFIX,antigravity-unleash.goog
 DOMAIN-SUFFIX,antigravity.google
+DOMAIN-SUFFIX,antspace.dev
 DOMAIN-SUFFIX,anythingllm.com
 DOMAIN-SUFFIX,arena.ai
 DOMAIN-SUFFIX,bard.google.com
 DOMAIN-SUFFIX,cerebras.ai
 DOMAIN-SUFFIX,chat.com
+DOMAIN-SUFFIX,chatbotclaude.com
 DOMAIN-SUFFIX,chatgpt.com
 DOMAIN-SUFFIX,chatgpt.livekit.cloud
 DOMAIN-SUFFIX,chatgpt.site
@@ -56,6 +71,19 @@ DOMAIN-SUFFIX,chutes.ai
 DOMAIN-SUFFIX,cici.com
 DOMAIN-SUFFIX,ciciai.com
 DOMAIN-SUFFIX,ciciaicdn.com
+DOMAIN-SUFFIX,clau.de
+DOMAIN-SUFFIX,claude.ai
+DOMAIN-SUFFIX,claude.app
+DOMAIN-SUFFIX,claude.com
+DOMAIN-SUFFIX,claude.dev
+DOMAIN-SUFFIX,claude.new
+DOMAIN-SUFFIX,claude.site
+DOMAIN-SUFFIX,claudeacademy.com
+DOMAIN-SUFFIX,claudemcpclient.com
+DOMAIN-SUFFIX,claudemcpcontent.com
+DOMAIN-SUFFIX,claudepages.dev
+DOMAIN-SUFFIX,claudestudio.com
+DOMAIN-SUFFIX,claudeusercontent.com
 DOMAIN-SUFFIX,clawhub.ai
 DOMAIN-SUFFIX,clipdrop.co
 DOMAIN-SUFFIX,codeium.com
@@ -173,9 +201,11 @@ DOMAIN-SUFFIX,pplx.ai
 DOMAIN-SUFFIX,proactivebackend-pa.googleapis.com
 DOMAIN-SUFFIX,qoder.com
 DOMAIN-SUFFIX,robinfrontend-pa.googleapis.com
+DOMAIN-SUFFIX,sentry.io
 DOMAIN-SUFFIX,sider.ai
 DOMAIN-SUFFIX,sora.com
 DOMAIN-SUFFIX,spicywriter.com
+DOMAIN-SUFFIX,statsigapi.net
 DOMAIN-SUFFIX,stitch.withgoogle.com
 DOMAIN-SUFFIX,syntx.ai
 DOMAIN-SUFFIX,talkai.info
@@ -191,3 +221,5 @@ DOMAIN-SUFFIX,x.ai
 DOMAIN-SUFFIX,youmind.ai
 DOMAIN-SUFFIX,youmind.com
 DOMAIN-SUFFIX,youmind.site
+IP-CIDR,160.79.104.0/23,no-resolve
+IP-CIDR6,2607:6bc0::/48,no-resolve
