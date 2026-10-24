@@ -1,20 +1,19 @@
 # AI 路由规则
 
-供 Loon 与 mihomo 使用的通用规则。Claude/Anthropic 已并入综合 AI（AI服务），Cursor 仍单独选择策略。这里不保存客户端配置、订阅地址、节点或凭据。
+供 Loon 与 mihomo 使用的通用规则。Claude/Anthropic 与 Cursor 均已并入综合 AI（AI服务）。这里不保存客户端配置、订阅地址、节点或凭据。
 
 | 文件 | 来源与用途 |
 | --- | --- |
-| `rules/Cursor.list` | MetaCubeX Cursor，加上官方登录和下载域名 |
-| `rules/AI-Meta.list` | MetaCubeX 综合 AI，并入 Anthropic/Claude（桌面域名、API 入口 IP 及兼容域名） |
+| `rules/AI-Meta.list` | MetaCubeX 综合 AI，并入 Anthropic/Claude（桌面域名、API 入口 IP 及兼容域名）与 Cursor（含官方登录和下载域名） |
 | `rules/AI-Kelee.list` | 可莉 AI 中未被 AI-Meta 覆盖的域名和兼容逻辑 |
 
-客户端依次匹配 Cursor、AI-Meta、AI-Kelee，再匹配 GitHub 等一般网站规则与直连兜底。mihomo 使用 `behavior: classical`、`format: text`；Loon 使用远程规则。规则中没有策略名称，由各客户端配置指定（综合 AI 产物绑定 AI服务）。
+客户端依次匹配 AI-Meta、AI-Kelee，再匹配 GitHub 等一般网站规则与直连兜底。mihomo 使用 `behavior: classical`、`format: text`；Loon 使用远程规则。规则中没有策略名称，由各客户端配置指定（综合 AI 产物绑定 AI服务）。
 
-`Cursor.list` 只覆盖 Cursor 服务域名。Grok / xAI 与 Claude / Anthropic 均走综合 AI 产物（AI-Meta / AI-Kelee → AI服务）。Cursor 内终端、GitHub 和第三方 API 请求仍按各自目标域名分类。
+Grok / xAI、Claude / Anthropic 与 Cursor 均走综合 AI 产物（AI-Meta / AI-Kelee → AI服务），不再单独发布 `Cursor.list`。Cursor 内终端、GitHub 和第三方 API 请求仍按各自目标域名分类。
 
 ## 更新
 
-GitHub Actions 每天北京时间 10:30 取源并校验，也可手动运行。MetaCubeX 的三个输入固定到同一提交，全部源验证成功后一次发布三份产物。下载失败、空源、关键域名缺失或未知语法会阻止更新，保留已发布版本。内容未变时不产生提交。
+GitHub Actions 每天北京时间 10:30 取源并校验，也可手动运行。MetaCubeX 的三个输入固定到同一提交，全部源验证成功后一次发布两份产物。下载失败、空源、关键域名缺失或未知语法会阻止更新，保留已发布版本。内容未变时不产生提交。
 
 可莉的 Loon 规则入口使用 Loon `User-Agent`。CI 还通过固定版本 `curl_cffi` 使用 Safari iOS 的 TLS 参数，以处理普通 Linux curl 遇到的浏览器校验；只对可莉入口启用。HTTP 错误、校验页和不合法规则仍会停止发布。
 
@@ -37,9 +36,9 @@ AI-Meta 另外精确匹配 `anthropic.auth0.com`、`anthropic-com.ghost.io`、`a
 
 这些补充由独立生成器保留，不通过规则同步 App 管理。Auth0、Ghost、Cloudflare 的其他域名，以及 Datadog、Sift、Intercom、Fathom 等共享平台，不因本次兼容补充整体归入 AI；也不按无关 ASN 分类。
 
-## Cursor 补充域名
+## Cursor 补充域名（并入 AI-Meta）
 
-根据 Cursor 官方[登录要求](https://prod.cursor.com/help/troubleshooting/sign-in-domains)和[网络要求](https://prod.cursor.com/docs/enterprise/network-configuration)，额外包含 `cursorvm.com` 域名后缀，以及 `anysphere-binaries.s3.us-east-1.amazonaws.com` 精确下载域名。后缀规则覆盖多层子域名；精确规则不扩展到其他 S3 服务。
+根据 Cursor 官方[登录要求](https://prod.cursor.com/help/troubleshooting/sign-in-domains)和[网络要求](https://prod.cursor.com/docs/enterprise/network-configuration)，AI-Meta 额外包含 `cursorvm.com` 域名后缀，以及 `anysphere-binaries.s3.us-east-1.amazonaws.com` 精确下载域名。后缀规则覆盖多层子域名；精确规则不扩展到其他 S3 服务。
 
 ## 来源
 

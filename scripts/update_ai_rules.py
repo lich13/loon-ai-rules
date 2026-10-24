@@ -50,7 +50,7 @@ ALLOWED_CONJUNCTIONS = frozenset((
     ("openaicom-api-", "azurefd.net"),
     ("antigravity-auto-updater-", "run.app"),
 ))
-OUTPUT_NAMES = ("Cursor.list", "AI-Meta.list", "AI-Kelee.list")
+OUTPUT_NAMES = ("AI-Meta.list", "AI-Kelee.list")
 DOMAIN_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
 
 
@@ -183,8 +183,9 @@ def build_rules(meta_ai, meta_claude, kelee, meta_cursor):
     ai_base = set(compact_rules(rule for rule in ai if not covered_by(rule, claude)))
     if len(ai_base) < 10:
         raise RuleError("incomplete AI sources")
-    # Merge Anthropic/Claude (core + extras + compatibility) into the AI服务-bound AI-Meta output.
-    ai = set(compact_rules(ai | claude))
+    # Merge Anthropic/Claude (core + extras + compatibility) and Cursor (core + extras)
+    # into the AI服务-bound AI-Meta output.
+    ai = set(compact_rules(ai | claude | cursor))
     extra = set(compact_rules(rule for rule in extra if not covered_by(rule, ai)))
     if not all(domain_matches(ai, domain) for domain in (
         "chatgpt.com", "api.openai.com", "gemini.google.com", "openrouter.ai",
@@ -193,12 +194,13 @@ def build_rules(meta_ai, meta_claude, kelee, meta_cursor):
         raise RuleError("Meta AI source lost required services")
     if not all(domain_matches(ai, domain) for domain in CLAUDE_SUFFIXES):
         raise RuleError("AI-Meta lost required Claude domains after merge")
+    if not all(covered_by(rule, ai) for rule in cursor):
+        raise RuleError("AI-Meta lost required Cursor domains after merge")
     if not extra:
         raise RuleError("incomplete AI sources")
     if domain_matches(ai | extra, "github.com"):
         raise RuleError("AI rules include the entire GitHub site")
     return {
-        "Cursor.list": compact_rules(cursor),
         "AI-Meta.list": sorted(ai),
         "AI-Kelee.list": sorted(extra),
     }
@@ -301,26 +303,23 @@ def render_artifacts(rules, commit):
             headers += [f"# Source: {KELEE_URL}",
                         "# Attribution: iKeLee / luestr/ProxyResource; CC BY-NC-SA 4.0.",
                         "# License: https://github.com/luestr/ProxyResource/blob/main/LICENSE",
-                        "# Change: normalize grammar; remove Meta-covered entries (Claude merged into AI-Meta)."]
+                        "# Change: normalize grammar; remove Meta-covered entries (Claude and Cursor merged into AI-Meta)."]
         else:
-            upstreams = {"Cursor.list": ("cursor",),
-                         "AI-Meta.list": ("category-ai-!cn", "anthropic")}[name]
+            upstreams = ("category-ai-!cn", "anthropic", "cursor")
             headers += [f"# Source: {META_RAW}/{commit}/geo/geosite/classical/{upstream}.list"
                         for upstream in upstreams]
             headers += ["# Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.",
                         "# Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE",
                         "# https://github.com/v2fly/domain-list-community/blob/master/LICENSE"]
-            if name == "Cursor.list":
-                headers += ["# Additions: Cursor hosted computers and exact download host.",
-                            "# https://prod.cursor.com/help/troubleshooting/sign-in-domains",
-                            "# https://prod.cursor.com/docs/enterprise/network-configuration"]
-            else:
-                headers += ["# Additions: merge Anthropic/Claude (desktop network, official IP ranges, compatibility).",
-                            "# https://code.claude.com/docs/en/desktop#network-access-requirements",
-                            "# https://platform.claude.com/docs/en/api/ip-addresses",
-                            "# Compatibility: three exact Anthropic hosts; Sentry and Statsig domain suffixes.",
-                            "# https://github.com/lich13/loon-ai-rules#claude-compatibility",
-                            "# Change: use the audited Azure keyword + suffix compatibility rule."]
+            headers += ["# Additions: merge Anthropic/Claude (desktop network, official IP ranges, compatibility).",
+                        "# https://code.claude.com/docs/en/desktop#network-access-requirements",
+                        "# https://platform.claude.com/docs/en/api/ip-addresses",
+                        "# Compatibility: three exact Anthropic hosts; Sentry and Statsig domain suffixes.",
+                        "# https://github.com/lich13/loon-ai-rules#claude-compatibility",
+                        "# Additions: merge Cursor (hosted computers and exact download host).",
+                        "# https://prod.cursor.com/help/troubleshooting/sign-in-domains",
+                        "# https://prod.cursor.com/docs/enterprise/network-configuration",
+                        "# Change: use the audited Azure keyword + suffix compatibility rule."]
         headers += [f"# Rules: {len(lines)}", f"# Content SHA-256: {hashlib.sha256(body.encode()).hexdigest()}"]
         result[name] = "\n".join(headers) + "\n\n" + body
     return result
@@ -335,7 +334,7 @@ def update(output_dir, fetch=fetch_text):
     rules = build_rules(**sources)
     artifacts = render_artifacts(rules, commit)
     output_dir = Path(output_dir)
-    obsolete = ("Claude.list",)
+    obsolete = ("Claude.list", "Cursor.list")
     up_to_date = all(
         (output_dir / name).is_file() and semantic_body((output_dir / name).read_text()) == semantic_body(text)
         for name, text in artifacts.items()

@@ -1,6 +1,7 @@
 # Public routing rules for Loon and mihomo. Generated; do not edit.
-# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/c8c1a27018377ec8a7f60c320efb3023681909eb/geo/geosite/classical/category-ai-!cn.list
-# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/c8c1a27018377ec8a7f60c320efb3023681909eb/geo/geosite/classical/anthropic.list
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/45a9c7f0489f8b1c7c3ae09192e2a6caa369a265/geo/geosite/classical/category-ai-!cn.list
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/45a9c7f0489f8b1c7c3ae09192e2a6caa369a265/geo/geosite/classical/anthropic.list
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/45a9c7f0489f8b1c7c3ae09192e2a6caa369a265/geo/geosite/classical/cursor.list
 # Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.
 # Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE
 # https://github.com/v2fly/domain-list-community/blob/master/LICENSE
@@ -9,9 +10,12 @@
 # https://platform.claude.com/docs/en/api/ip-addresses
 # Compatibility: three exact Anthropic hosts; Sentry and Statsig domain suffixes.
 # https://github.com/lich13/loon-ai-rules#claude-compatibility
+# Additions: merge Cursor (hosted computers and exact download host).
+# https://prod.cursor.com/help/troubleshooting/sign-in-domains
+# https://prod.cursor.com/docs/enterprise/network-configuration
 # Change: use the audited Azure keyword + suffix compatibility rule.
-# Rules: 210
-# Content SHA-256: 6cbf9f8b0409458dc0a53a241eb183fcee744f4fa405b2bb465918a8263aec87
+# Rules: 211
+# Content SHA-256: c119d74bb2233c621a7c8e892b6799023d28d09be859c9ad03bc04d7c4dc6a19
 
 AND,((DOMAIN-KEYWORD,chatgpt-async-webps-prod-),(DOMAIN-SUFFIX,webpubsub.azure.com))
 DOMAIN,ai.google.dev
@@ -22,6 +26,7 @@ DOMAIN,anthropic.auth0.com
 DOMAIN,anthropic.com.cdn.cloudflare.net
 DOMAIN,antigravity-pa.googleapis.com
 DOMAIN,antigravity.googleapis.com
+DOMAIN,anysphere-binaries.s3.us-east-1.amazonaws.com
 DOMAIN,browser-intake-datadoghq.com
 DOMAIN,cloudaicompanion.googleapis.com
 DOMAIN,cloudcode-pa.googleapis.com

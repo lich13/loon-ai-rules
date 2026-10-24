@@ -63,6 +63,8 @@ CURSOR_EXTRA = (
 )
 KELEE_XAI_FALLBACKS = (
     "DOMAIN,api.grokusercontent.com",
+)
+KELEE_CURSOR_FALLBACKS = (
     "DOMAIN,api.cursorvm.com",
 )
 REVIEWED_NETWORKS = tuple(
@@ -87,7 +89,7 @@ def valid_sources():
         "DOMAIN,api.provider-0.example.invalid",
         "DOMAIN-SUFFIX,child.provider-0.example.invalid",
     ) + REVIEWED_NETWORKS)
-    kelee = ai + source_text(KELEE_ADDITIONS + KELEE_XAI_FALLBACKS + (
+    kelee = ai + source_text(KELEE_ADDITIONS + KELEE_XAI_FALLBACKS + KELEE_CURSOR_FALLBACKS + (
         "DOMAIN,api.supplement.example.invalid",
         "DOMAIN-SUFFIX,child.supplement.example.invalid",
         "DOMAIN,standalone.example.invalid",
@@ -236,24 +238,26 @@ class BuildRulesTests(OfflineTestCase):
                 self.assertIn(rule, ai_meta)
         self.assertNotIn("Claude.list", built)
 
-    def test_cursor_has_four_meta_suffixes_and_two_approved_additions(self):
+    def test_cursor_core_and_approved_additions_are_merged_into_ai_meta(self):
         built = generator.build_rules(**valid_sources())
-        self.assertEqual(built["Cursor.list"], sorted(CURSOR_CORE + CURSOR_EXTRA))
-        self.assertEqual(len(built["Cursor.list"]), 6)
-        self.assertEqual(len(set(built["Cursor.list"])), 6)
+        for rule in CURSOR_CORE + CURSOR_EXTRA:
+            with self.subTest(rule=rule):
+                self.assertIn(rule, built["AI-Meta.list"])
+        self.assertNotIn("Cursor.list", built)
+        self.assertEqual(set(built), set(generator.OUTPUT_NAMES))
 
     def test_cursor_suffixes_match_multiple_subdomain_levels(self):
-        cursor = generator.build_rules(**valid_sources())["Cursor.list"]
+        ai_meta = generator.build_rules(**valid_sources())["AI-Meta.list"]
         for suffix in tuple(rule.split(",", 1)[1] for rule in CURSOR_CORE) + ("cursorvm.com",):
             for domain in (suffix, "fixture." + suffix, "nested.fixture." + suffix):
                 with self.subTest(domain=domain):
-                    self.assertTrue(generator.domain_matches(cursor, domain))
+                    self.assertTrue(generator.domain_matches(ai_meta, domain))
             for domain in ("not" + suffix, suffix + ".example.invalid", suffix.replace(".", "-")):
                 with self.subTest(domain=domain):
-                    self.assertFalse(generator.domain_matches(cursor, domain))
+                    self.assertFalse(generator.domain_matches(ai_meta, domain))
 
     def test_cursor_exact_download_host_does_not_expand_to_other_tenants(self):
-        cursor = generator.build_rules(**valid_sources())["Cursor.list"]
+        ai_meta = generator.build_rules(**valid_sources())["AI-Meta.list"]
         host = "anysphere-binaries.s3.us-east-1.amazonaws.com"
         other_tenants = (
             "amazonaws.com", "s3.us-east-1.amazonaws.com", "other.s3.us-east-1.amazonaws.com",
@@ -261,25 +265,21 @@ class BuildRulesTests(OfflineTestCase):
             "anysphere-binaries.s3.us-east-2.amazonaws.com",
             "child.anysphere-binaries.s3.us-east-1.amazonaws.com",
         )
-        self.assertIn("DOMAIN," + host, cursor)
-        self.assertNotIn("DOMAIN-SUFFIX," + host, cursor)
-        self.assertTrue(generator.domain_matches(cursor, host))
+        self.assertIn("DOMAIN," + host, ai_meta)
+        self.assertNotIn("DOMAIN-SUFFIX," + host, ai_meta)
+        self.assertTrue(generator.domain_matches(ai_meta, host))
         for domain in other_tenants:
             with self.subTest(domain=domain):
-                self.assertFalse(generator.domain_matches(cursor, domain))
+                self.assertFalse(generator.domain_matches(ai_meta, domain))
 
-    def test_cursor_does_not_import_github_claude_xai_or_unrelated_rules(self):
+    def test_cursor_fallbacks_are_deduped_from_kelee_and_xai_stays_in_ai_outputs(self):
         built = generator.build_rules(**valid_sources())
-        cursor = built["Cursor.list"]
-        for domain in (
-            "api.github.com", "claude.com", "anthropic.com", "provider-0.example.invalid",
-            "supplement.example.invalid", "grok.com", "x.ai", "api.grokusercontent.com",
-        ):
-            with self.subTest(domain=domain):
-                self.assertFalse(generator.domain_matches(cursor, domain))
-        self.assertTrue(generator.domain_matches(cursor, "api.cursorvm.com"))
+        self.assertTrue(generator.domain_matches(built["AI-Meta.list"], "api.cursorvm.com"))
+        for rule in KELEE_CURSOR_FALLBACKS:
+            self.assertNotIn(rule, built["AI-Kelee.list"])
+        self.assertFalse(any("cursor" in rule for rule in built["AI-Kelee.list"]))
         self.assertTrue(generator.domain_matches(built["AI-Kelee.list"], "api.github.com"))
-        for rule in XAI_CORE + CURSOR_CORE:
+        for rule in XAI_CORE + CURSOR_CORE + CURSOR_EXTRA:
             self.assertIn(rule, built["AI-Meta.list"])
         for rule in KELEE_XAI_FALLBACKS:
             self.assertIn(rule, built["AI-Kelee.list"])
@@ -354,12 +354,13 @@ class BuildRulesTests(OfflineTestCase):
                               + REVIEWED_NETWORKS + CLAUDE_COMPATIBILITY_RULES)
         self.assertEqual(
             built["AI-Meta.list"],
-            sorted(set(AI_CORE + AI_SYNTHETIC + XAI_CORE + CURSOR_CORE) | expected_claude),
+            sorted(set(AI_CORE + AI_SYNTHETIC + XAI_CORE + CURSOR_CORE + CURSOR_EXTRA) | expected_claude),
         )
         self.assertEqual(built["AI-Kelee.list"], sorted(KELEE_ADDITIONS + KELEE_XAI_FALLBACKS + ("DOMAIN,api.github.com",)))
         self.assertTrue(expected_claude.issubset(built["AI-Meta.list"]))
         self.assertTrue(expected_claude.isdisjoint(built["AI-Kelee.list"]))
         self.assertNotIn("Claude.list", built)
+        self.assertNotIn("Cursor.list", built)
 
     def test_compatibility_rules_and_subdomains_are_deduped_into_ai_meta(self):
         baseline = generator.build_rules(**valid_sources())
@@ -715,13 +716,14 @@ class FetchSourcesTests(OfflineTestCase):
 
 
 class UpdateTests(OfflineTestCase):
-    def test_all_three_files_have_the_validated_rules_and_matching_metadata(self):
+    def test_every_output_file_has_the_validated_rules_and_matching_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "rules"
             rules, changed = generator.update(output, FixtureFetch())
             self.assertTrue(changed)
             self.assertEqual(set(path.name for path in output.iterdir()), set(generator.OUTPUT_NAMES))
             self.assertNotIn("Claude.list", {path.name for path in output.iterdir()})
+            self.assertNotIn("Cursor.list", {path.name for path in output.iterdir()})
             for name, lines in rules.items():
                 with self.subTest(output=name):
                     text = (output / name).read_text(encoding="utf-8")
@@ -734,12 +736,11 @@ class UpdateTests(OfflineTestCase):
                     if name == "AI-Kelee.list":
                         self.assertIn(generator.KELEE_URL, text)
                         self.assertIn("CC BY-NC-SA 4.0", text)
-                    elif name == "Cursor.list":
-                        self.assertIn(f"/{REVISION}/geo/geosite/classical/cursor.list", text)
-                        self.assertNotIn("/xai.list", text)
                     else:
                         self.assertIn(f"/{REVISION}/", text)
                         self.assertIn("/anthropic.list", text)
+                        self.assertIn(f"/{REVISION}/geo/geosite/classical/cursor.list", text)
+                        self.assertNotIn("/xai.list", text)
                         self.assertIn("# Compatibility:", text)
                         self.assertIn("https://github.com/lich13/loon-ai-rules#claude-compatibility", text)
             self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
@@ -874,7 +875,7 @@ class UpdateTests(OfflineTestCase):
                 generator.update(output, fetch)
             self.assertEqual(list(Path(temporary).iterdir()), [])
 
-    def test_staging_write_failure_preserves_all_three_existing_files(self):
+    def test_staging_write_failure_preserves_every_existing_file(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "rules"
             generator.update(output, FixtureFetch())
@@ -923,17 +924,19 @@ class UpdateTests(OfflineTestCase):
             self.assertTrue(changed)
             self.assertEqual({path.name for path in output.iterdir()}, set(generator.OUTPUT_NAMES))
 
-    def test_obsolete_claude_list_is_removed_on_update(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary) / "rules"
-            generator.update(output, FixtureFetch())
-            stale = output / "Claude.list"
-            stale.write_text("# obsolete fixture\nDOMAIN,stale.example.invalid\n", encoding="utf-8")
-            self.assertTrue(stale.is_file())
-            _, changed = generator.update(output, FixtureFetch())
-            self.assertTrue(changed)
-            self.assertFalse(stale.exists())
-            self.assertEqual({path.name for path in output.iterdir()}, set(generator.OUTPUT_NAMES))
+    def test_obsolete_claude_and_cursor_lists_are_removed_on_update(self):
+        for obsolete in ("Claude.list", "Cursor.list"):
+            with self.subTest(obsolete=obsolete):
+                with tempfile.TemporaryDirectory() as temporary:
+                    output = Path(temporary) / "rules"
+                    generator.update(output, FixtureFetch())
+                    stale = output / obsolete
+                    stale.write_text("# obsolete fixture\nDOMAIN,stale.example.invalid\n", encoding="utf-8")
+                    self.assertTrue(stale.is_file())
+                    _, changed = generator.update(output, FixtureFetch())
+                    self.assertTrue(changed)
+                    self.assertFalse(stale.exists())
+                    self.assertEqual({path.name for path in output.iterdir()}, set(generator.OUTPUT_NAMES))
 
 
 if __name__ == "__main__":
