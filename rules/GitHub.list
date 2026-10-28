@@ -1,0 +1,39 @@
+# Public routing rules for Loon and mihomo. Generated; do not edit.
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/9f2b7462c7508ad85a1137e70d502b783c89794d/geo/geosite/classical/github.list
+# Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.
+# Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE
+# https://github.com/v2fly/domain-list-community/blob/master/LICENSE
+# Change: remove download hosts (HighTraffic.list) and Copilot (AI-Meta.list).
+# Rules: 30
+# Content SHA-256: 030d50795d7792f04bb1f66094259f4228312481282d901878b3b9ad360006f9
+
+DOMAIN,github-api.arkoselabs.com
+DOMAIN-SUFFIX,atom.io
+DOMAIN-SUFFIX,dependabot.com
+DOMAIN-SUFFIX,gh.io
+DOMAIN-SUFFIX,ghe.com
+DOMAIN-SUFFIX,git.io
+DOMAIN-SUFFIX,github.ai
+DOMAIN-SUFFIX,github.blog
+DOMAIN-SUFFIX,github.career
+DOMAIN-SUFFIX,github.com
+DOMAIN-SUFFIX,github.community
+DOMAIN-SUFFIX,github.dev
+DOMAIN-SUFFIX,github.io
+DOMAIN-SUFFIX,githubapp.com
+DOMAIN-SUFFIX,githubassets.com
+DOMAIN-SUFFIX,githubhackathon.com
+DOMAIN-SUFFIX,githubnext.com
+DOMAIN-SUFFIX,githubpreview.dev
+DOMAIN-SUFFIX,githubstatus.com
+DOMAIN-SUFFIX,githubsupport.com
+DOMAIN-SUFFIX,githubuniverse.com
+DOMAIN-SUFFIX,githubusercontent.com
+DOMAIN-SUFFIX,myoctocat.com
+DOMAIN-SUFFIX,npm.community
+DOMAIN-SUFFIX,npmjs.com
+DOMAIN-SUFFIX,npmjs.org
+DOMAIN-SUFFIX,octocaptcha.com
+DOMAIN-SUFFIX,opensource.guide
+DOMAIN-SUFFIX,repo.new
+DOMAIN-SUFFIX,thegithubshop.com

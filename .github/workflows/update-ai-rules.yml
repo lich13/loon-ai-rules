@@ -1,4 +1,4 @@
-name: Update public AI rules
+name: Update public routing rules
 
 on:
   schedule:
@@ -33,7 +33,7 @@ jobs:
       - name: Publish the complete rule set
         run: |
           set -euo pipefail
-          git add -- rules/AI-Meta.list rules/AI-Kelee.list
+          git add -- rules/HighTraffic.list rules/AI-Meta.list rules/AI-Kelee.list rules/GitHub.list rules/Google.list
           git rm -f --cached --ignore-unmatch --quiet -- rules/Claude.list rules/Cursor.list
           if git diff --cached --quiet; then
             echo "Rules are unchanged."
@@ -41,5 +41,5 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: update public AI routing rules"
+          git commit -m "chore: update public routing rules"
           git push origin HEAD:main

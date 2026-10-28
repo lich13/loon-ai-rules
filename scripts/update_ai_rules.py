@@ -49,8 +49,56 @@ ALLOWED_CONJUNCTIONS = frozenset((
     ("chatgpt-async-webps-prod-", "webpubsub.azure.com"),
     ("openaicom-api-", "azurefd.net"),
     ("antigravity-auto-updater-", "run.app"),
+    # Google Drive file content hosts look like doc-0s-2c-docs.googleusercontent.com.
+    ("-docs", "googleusercontent.com"),
 ))
-OUTPUT_NAMES = ("AI-Meta.list", "AI-Kelee.list")
+# Google-operated single-label TLDs present in MetaCubeX google/youtube; any other
+# single-label suffix (for example "com") is rejected.
+REVIEWED_TLDS = frozenset((
+    "android", "chrome", "dclk", "gbiz", "gle", "gmail", "goog", "google", "guge",
+    "hangout", "nexus", "xn--flw351e", "xn--qcka1pmc", "youtube",
+))
+# Google Play download regexes in MetaCubeX google; dropped only when the named
+# suffix is published (googlevideo.com in HighTraffic, xn--ngstr-lra8j.com in Google).
+COVERED_REGEXES = {
+    r"^r+[0-9]+(---|\.)sn-(2x3|ni5|j5o)\w{5}\.xn--ngstr-lra8j\.com$": "DOMAIN-SUFFIX,xn--ngstr-lra8j.com",
+    r"^r+[0-9]+(---|\.)sn-(2x3|ni5|j5o)\w{5}\.googlevideo\.com$": "DOMAIN-SUFFIX,googlevideo.com",
+}
+HIGH_TRAFFIC_UPSTREAMS = ("youtube", "twitch", "tiktok")
+# Drive / Photos file content only; account, search, API and web UI stay in Google.list.
+GOOGLE_CONTENT_HOSTS = (
+    "DOMAIN,drive.usercontent.google.com",
+    "DOMAIN,docs.googleusercontent.com",
+    "AND,((DOMAIN-KEYWORD,-docs),(DOMAIN-SUFFIX,googleusercontent.com))",
+    "DOMAIN,video-downloads.googleusercontent.com",
+    "DOMAIN,photos.fife.usercontent.google.com",
+    "DOMAIN,lh3.googleusercontent.com",
+    "DOMAIN,lh4.googleusercontent.com",
+    "DOMAIN,lh5.googleusercontent.com",
+    "DOMAIN,lh6.googleusercontent.com",
+)
+GITHUB_DOWNLOAD_HOSTS = (
+    "DOMAIN,objects.githubusercontent.com",
+    "DOMAIN,release-assets.githubusercontent.com",
+    "DOMAIN,raw.githubusercontent.com",
+    "DOMAIN,media.githubusercontent.com",
+    "DOMAIN,codeload.github.com",
+    "DOMAIN,github-releases.githubusercontent.com",
+    "DOMAIN,pkg-containers.githubusercontent.com",
+    "DOMAIN-SUFFIX,ghcr.io",
+)
+# Exact storage hosts taken from MetaCubeX github.list and moved to HighTraffic.
+GITHUB_MOVED_RE = re.compile(
+    r"DOMAIN,(?:github-production-[a-z0-9-]+\.s3\.amazonaws\.com|github-cloud\.s3\.amazonaws\.com"
+    r"|productionresultssa\d{1,2}\.blob\.core\.windows\.net)"
+)
+# Whole shared suffixes that must never be routed as high traffic.
+HIGH_TRAFFIC_FORBIDDEN = (
+    "google.com", "googleapis.com", "googleusercontent.com", "usercontent.google.com",
+    "github.com", "githubusercontent.com", "amazonaws.com", "s3.amazonaws.com",
+    "blob.core.windows.net", "cloudfront.net", "akamaized.net", "edgesuite.net",
+)
+OUTPUT_NAMES = ("HighTraffic.list", "AI-Meta.list", "AI-Kelee.list", "GitHub.list", "Google.list")
 DOMAIN_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
 
 
@@ -68,6 +116,8 @@ def parse_rule(line):
     kind = parts[0]
     if kind in ("DOMAIN", "DOMAIN-SUFFIX") and len(parts) == 2:
         domain = parts[1].lower()
+        if kind == "DOMAIN-SUFFIX" and domain in REVIEWED_TLDS:
+            return f"{kind},{domain}"
         if not DOMAIN_RE.fullmatch(domain):
             raise RuleError("invalid domain")
         return f"{kind},{domain}"
@@ -113,6 +163,21 @@ def parse_rules(text, source):
     return rules
 
 
+def strip_covered_regexes(text, source):
+    """Remove only reviewed regexes that a published suffix rule fully covers."""
+    kept, required = [], set()
+    for line in text.lstrip("\ufeff").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("DOMAIN-REGEX,"):
+            pattern = stripped.split(",", 1)[1].strip()
+            if pattern not in COVERED_REGEXES:
+                raise RuleError(f"{source}: unreviewed regex rule")
+            required.add(COVERED_REGEXES[pattern])
+            continue
+        kept.append(line)
+    return "\n".join(kept) + "\n", required
+
+
 def covered_by(rule, rules):
     if rule in rules:
         return True
@@ -146,7 +211,8 @@ def domain_matches(rules, domain):
     return False
 
 
-def build_rules(meta_ai, meta_claude, kelee, meta_cursor):
+def build_rules(meta_ai, meta_claude, kelee, meta_cursor,
+                meta_youtube, meta_twitch, meta_tiktok, meta_github, meta_google):
     ai = parse_rules(meta_ai, "Meta AI")
     claude = parse_rules(meta_claude, "Meta Anthropic")
     extra = parse_rules(kelee, "Kelee AI")
@@ -200,10 +266,86 @@ def build_rules(meta_ai, meta_claude, kelee, meta_cursor):
         raise RuleError("incomplete AI sources")
     if domain_matches(ai | extra, "github.com"):
         raise RuleError("AI rules include the entire GitHub site")
-    return {
+    high, github, google, overlaps = build_traffic_rules(
+        ai, extra, meta_youtube, meta_twitch, meta_tiktok, meta_github, meta_google,
+    )
+    result = {
+        "HighTraffic.list": sorted(high),
         "AI-Meta.list": sorted(ai),
         "AI-Kelee.list": sorted(extra),
+        "GitHub.list": sorted(github),
+        "Google.list": sorted(google),
     }
+    names = list(result)
+    for index, first in enumerate(names):
+        for second in names[index + 1:]:
+            if set(result[first]) & set(result[second]):
+                raise RuleError(f"{first} and {second} share rules")
+    LAST_OVERLAPS[:] = overlaps
+    return result
+
+
+# High-traffic candidates left in the AI lists by the last build, for the run summary.
+LAST_OVERLAPS = []
+
+
+def build_traffic_rules(ai, extra, meta_youtube, meta_twitch, meta_tiktok, meta_github, meta_google):
+    """HighTraffic first, then GitHub and Google minus everything published earlier."""
+    youtube = parse_rules(meta_youtube, "Meta YouTube")
+    twitch = parse_rules(meta_twitch, "Meta Twitch")
+    tiktok = parse_rules(meta_tiktok, "Meta TikTok")
+    github_source = parse_rules(meta_github, "Meta GitHub")
+    google_text, required_suffixes = strip_covered_regexes(meta_google, "Meta Google")
+    google_source = parse_rules(google_text, "Meta Google")
+    for source, rules in (("Meta YouTube", youtube), ("Meta Twitch", twitch), ("Meta TikTok", tiktok),
+                          ("Meta GitHub", github_source), ("Meta Google", google_source)):
+        if any(not rule.startswith(("DOMAIN,", "DOMAIN-SUFFIX,")) for rule in rules):
+            raise RuleError(f"{source}: upstream must contain domain rules only")
+    for source, rules, domains in (
+        ("Meta YouTube", youtube, ("youtube.com", "googlevideo.com", "ytimg.com",
+                                   "youtubei.googleapis.com", "youtube-nocookie.com")),
+        ("Meta Twitch", twitch, ("twitch.tv",)),
+        ("Meta TikTok", tiktok, ("tiktok.com",)),
+        ("Meta GitHub", github_source, ("github.com", "githubusercontent.com")),
+        ("Meta Google", google_source, ("google.com", "googleapis.com", "play.google.com",
+                                        "googleplay.com", "accounts.google.com")),
+    ):
+        if not all(domain_matches(rules, domain) for domain in domains):
+            raise RuleError(f"{source}: source lost required domains")
+    moved = {rule for rule in github_source if GITHUB_MOVED_RE.fullmatch(rule)}
+    if not any("productionresultssa" in rule for rule in moved) or not any(".s3." in rule for rule in moved):
+        raise RuleError("Meta GitHub: source lost download storage hosts")
+    high = youtube | twitch | tiktok | moved | set(GOOGLE_CONTENT_HOSTS) | set(GITHUB_DOWNLOAD_HOSTS)
+    for domain in HIGH_TRAFFIC_FORBIDDEN:
+        if domain_matches(high, domain) or domain_matches(high, "unrelated." + domain):
+            raise RuleError("HighTraffic includes an entire shared domain")
+    # AI entries win: drop high-traffic rules already published by the AI lists.
+    ai_all = ai | extra
+    overlaps = sorted(rule for rule in high if covered_by(rule, ai_all))
+    high = set(compact_rules(rule for rule in high if not covered_by(rule, ai_all)))
+    # HighTraffic is matched before the AI lists, so it must not capture any AI host.
+    for rule in ai_all:
+        kind, value, *_ = rule.split(",")
+        if kind in ("DOMAIN", "DOMAIN-SUFFIX") and domain_matches(high, value):
+            raise RuleError("HighTraffic would capture an AI rule")
+    earlier = ai_all | high
+    github = set(compact_rules(
+        rule for rule in github_source - moved if not covered_by(rule, earlier)
+    ))
+    if not domain_matches(github, "github.com"):
+        raise RuleError("GitHub list lost the main site")
+    earlier |= github
+    google = set(compact_rules(rule for rule in google_source if not covered_by(rule, earlier)))
+    for suffix in required_suffixes:
+        if suffix not in high | google:
+            raise RuleError("Meta Google: regex is not covered by a published suffix")
+    if domain_matches(google, "youtube.com") or domain_matches(google, "www.youtube.com"):
+        raise RuleError("Google list still includes YouTube")
+    if not all(domain_matches(google, domain) for domain in ("google.com", "googleapis.com", "play.google.com")):
+        raise RuleError("Google list lost required domains")
+    if len(high) < 50 or len(github) < 10 or len(google) < 100:
+        raise RuleError("incomplete traffic sources")
+    return high, github, google, overlaps
 
 
 def fetch_text(url):
@@ -288,6 +430,11 @@ def fetch_sources(fetch=fetch_text):
         "meta_ai": fetch(f"{base}/category-ai-!cn.list"),
         "meta_claude": fetch(f"{base}/anthropic.list"),
         "meta_cursor": fetch(f"{base}/cursor.list"),
+        "meta_youtube": fetch(f"{base}/youtube.list"),
+        "meta_twitch": fetch(f"{base}/twitch.list"),
+        "meta_tiktok": fetch(f"{base}/tiktok.list"),
+        "meta_github": fetch(f"{base}/github.list"),
+        "meta_google": fetch(f"{base}/google.list"),
         "kelee": fetch(KELEE_URL),
     }
     return sources, commit
@@ -299,7 +446,29 @@ def render_artifacts(rules, commit):
         lines = rules[name]
         body = "\n".join(lines) + "\n"
         headers = ["# Public routing rules for Loon and mihomo. Generated; do not edit."]
-        if name == "AI-Kelee.list":
+        meta_attribution = [
+            "# Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.",
+            "# Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE",
+            "# https://github.com/v2fly/domain-list-community/blob/master/LICENSE",
+        ]
+        if name == "HighTraffic.list":
+            headers += [f"# Source: {META_RAW}/{commit}/geo/geosite/classical/{upstream}.list"
+                        for upstream in HIGH_TRAFFIC_UPSTREAMS + ("github",)]
+            headers += meta_attribution
+            headers += ["# Change: github.list contributes only its exact S3 / Actions artifact storage hosts.",
+                        "# Additions: Google Drive / Photos file content hosts and GitHub download hosts.",
+                        "# https://github.com/lich13/loon-ai-rules#high-traffic",
+                        "# Change: entries already in AI-Meta / AI-Kelee are left there."]
+        elif name == "GitHub.list":
+            headers += [f"# Source: {META_RAW}/{commit}/geo/geosite/classical/github.list"]
+            headers += meta_attribution
+            headers += ["# Change: remove download hosts (HighTraffic.list) and Copilot (AI-Meta.list)."]
+        elif name == "Google.list":
+            headers += [f"# Source: {META_RAW}/{commit}/geo/geosite/classical/google.list"]
+            headers += meta_attribution
+            headers += ["# Change: remove YouTube and Drive/Photos content (HighTraffic.list) and AI hosts (AI-Meta / AI-Kelee).",
+                        "# Change: drop two Google Play download regexes covered by published suffix rules."]
+        elif name == "AI-Kelee.list":
             headers += [f"# Source: {KELEE_URL}",
                         "# Attribution: iKeLee / luestr/ProxyResource; CC BY-NC-SA 4.0.",
                         "# License: https://github.com/luestr/ProxyResource/blob/main/LICENSE",
@@ -370,7 +539,8 @@ def main():
         rules, changed = update(args.output, fetch_with_browser_tls if args.browser_tls else fetch_text)
     except (RuleError, OSError, subprocess.TimeoutExpired) as error:
         parser.exit(1, f"Rule update stopped: {error}\n")
-    print(json.dumps({"changed": changed, "counts": {name: len(lines) for name, lines in rules.items()}}))
+    print(json.dumps({"changed": changed, "counts": {name: len(lines) for name, lines in rules.items()},
+                      "high_traffic_kept_in_ai": LAST_OVERLAPS}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

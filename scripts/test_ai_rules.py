@@ -70,6 +70,43 @@ KELEE_CURSOR_FALLBACKS = (
 REVIEWED_NETWORKS = tuple(
     rule for rule in generator.CLAUDE_EXTRA if rule.startswith(("IP-CIDR,", "IP-CIDR6,"))
 )
+YOUTUBE_CORE = (
+    "DOMAIN-SUFFIX,youtube.com",
+    "DOMAIN-SUFFIX,googlevideo.com",
+    "DOMAIN-SUFFIX,ytimg.com",
+    "DOMAIN-SUFFIX,youtubei.googleapis.com",
+    "DOMAIN-SUFFIX,youtube-nocookie.com",
+    "DOMAIN-SUFFIX,youtube",
+    "DOMAIN,yt3.googleusercontent.com",
+) + tuple(f"DOMAIN-SUFFIX,youtube.c{number}.example.invalid" for number in range(40))
+TWITCH_CORE = ("DOMAIN-SUFFIX,twitch.tv", "DOMAIN-SUFFIX,ttvnw.net")
+TIKTOK_CORE = ("DOMAIN-SUFFIX,tiktok.com", "DOMAIN-SUFFIX,tiktokcdn.com")
+GITHUB_STORAGE = (
+    "DOMAIN,github-cloud.s3.amazonaws.com",
+    "DOMAIN,github-production-release-asset-2e65be.s3.amazonaws.com",
+    "DOMAIN,productionresultssa0.blob.core.windows.net",
+    "DOMAIN,productionresultssa19.blob.core.windows.net",
+)
+GITHUB_SITE = (
+    "DOMAIN-SUFFIX,github.com",
+    "DOMAIN-SUFFIX,githubusercontent.com",
+    "DOMAIN-SUFFIX,ghcr.io",
+    "DOMAIN,copilot-proxy.githubusercontent.com",
+    "DOMAIN,github-api.arkoselabs.com",
+) + tuple(f"DOMAIN-SUFFIX,github-site-{number}.example.invalid" for number in range(10))
+GOOGLE_PLAY_REGEXES = tuple(f"DOMAIN-REGEX,{pattern}" for pattern in generator.COVERED_REGEXES)
+GOOGLE_SITE = (
+    "DOMAIN-SUFFIX,google.com",
+    "DOMAIN-SUFFIX,googleapis.com",
+    "DOMAIN-SUFFIX,googleusercontent.com",
+    "DOMAIN-SUFFIX,googleplay.com",
+    "DOMAIN-SUFFIX,play.google.com",
+    "DOMAIN-SUFFIX,xn--ngstr-lra8j.com",
+    "DOMAIN-SUFFIX,google",
+    "DOMAIN,gemini.google.com",
+    "DOMAIN-SUFFIX,youtube.com",
+    "DOMAIN-SUFFIX,googlevideo.com",
+) + tuple(f"DOMAIN-SUFFIX,google-site-{number}.example.invalid" for number in range(100))
 KELEE_ADDITIONS = (
     "DOMAIN-SUFFIX,supplement.example.invalid",
     "DOMAIN,standalone.example.invalid",
@@ -99,6 +136,11 @@ def valid_sources():
         "meta_ai": ai,
         "meta_claude": claude,
         "meta_cursor": source_text(CURSOR_CORE),
+        "meta_youtube": source_text(YOUTUBE_CORE),
+        "meta_twitch": source_text(TWITCH_CORE),
+        "meta_tiktok": source_text(TIKTOK_CORE),
+        "meta_github": source_text(GITHUB_SITE + GITHUB_STORAGE),
+        "meta_google": source_text(GOOGLE_SITE + GOOGLE_PLAY_REGEXES),
         "kelee": kelee,
     }
 
@@ -112,6 +154,11 @@ class FixtureFetch:
             f"{base}/category-ai-!cn.list": self.sources["meta_ai"],
             f"{base}/anthropic.list": self.sources["meta_claude"],
             f"{base}/cursor.list": self.sources["meta_cursor"],
+            f"{base}/youtube.list": self.sources["meta_youtube"],
+            f"{base}/twitch.list": self.sources["meta_twitch"],
+            f"{base}/tiktok.list": self.sources["meta_tiktok"],
+            f"{base}/github.list": self.sources["meta_github"],
+            f"{base}/google.list": self.sources["meta_google"],
             generator.KELEE_URL: self.sources["kelee"],
         }
         self.calls = []
@@ -155,7 +202,7 @@ class ParseRuleTests(OfflineTestCase):
                 )
 
     def test_audited_conjunctions_accept_both_operand_orders(self):
-        self.assertEqual(len(generator.ALLOWED_CONJUNCTIONS), 3)
+        self.assertEqual(len(generator.ALLOWED_CONJUNCTIONS), 4)
         for keyword, suffix in generator.ALLOWED_CONJUNCTIONS:
             expected = f"AND,((DOMAIN-KEYWORD,{keyword}),(DOMAIN-SUFFIX,{suffix}))"
             reverse = f" AND, ((DOMAIN-SUFFIX, {suffix}), (DOMAIN-KEYWORD, {keyword})) "
@@ -504,6 +551,130 @@ class BuildRulesTests(OfflineTestCase):
         self.assertEqual(generator.build_rules(**sources), generator.build_rules(**rearranged))
 
 
+class TrafficListTests(OfflineTestCase):
+    def test_single_label_suffixes_are_limited_to_reviewed_google_tlds(self):
+        self.assertEqual(generator.parse_rule("DOMAIN-SUFFIX,YouTube"), "DOMAIN-SUFFIX,youtube")
+        for line in ("DOMAIN-SUFFIX,com", "DOMAIN-SUFFIX,net", "DOMAIN,google", "DOMAIN,youtube"):
+            with self.subTest(rule=line):
+                with self.assertRaises(generator.RuleError):
+                    generator.parse_rule(line)
+
+    def test_youtube_is_only_in_high_traffic(self):
+        built = generator.build_rules(**valid_sources())
+        for domain in ("www.youtube.com", "rr1---sn-abc.googlevideo.com", "i.ytimg.com",
+                       "youtubei.googleapis.com", "yt3.googleusercontent.com", "www.youtube-nocookie.com"):
+            with self.subTest(domain=domain):
+                self.assertTrue(generator.domain_matches(built["HighTraffic.list"], domain))
+        for domain in ("www.youtube.com", "rr1---sn-abc.googlevideo.com", "fixture.youtube"):
+            with self.subTest(google=domain):
+                self.assertFalse(generator.domain_matches(built["Google.list"], domain))
+        self.assertFalse(any("youtube" in rule or "googlevideo" in rule for rule in built["Google.list"]))
+
+    def test_high_traffic_has_twitch_tiktok_drive_photos_and_github_downloads(self):
+        high = generator.build_rules(**valid_sources())["HighTraffic.list"]
+        for domain in ("twitch.tv", "video.ttvnw.net", "www.tiktok.com", "drive.usercontent.google.com",
+                       "doc-0s-2c-docs.googleusercontent.com", "lh3.googleusercontent.com",
+                       "photos.fife.usercontent.google.com", "video-downloads.googleusercontent.com",
+                       "objects.githubusercontent.com", "release-assets.githubusercontent.com",
+                       "raw.githubusercontent.com", "codeload.github.com", "ghcr.io",
+                       "pkg-containers.githubusercontent.com", "github-cloud.s3.amazonaws.com",
+                       "github-production-release-asset-2e65be.s3.amazonaws.com",
+                       "productionresultssa19.blob.core.windows.net"):
+            with self.subTest(domain=domain):
+                self.assertTrue(generator.domain_matches(high, domain))
+
+    def test_high_traffic_never_takes_whole_shared_or_account_domains(self):
+        high = generator.build_rules(**valid_sources())["HighTraffic.list"]
+        for domain in ("google.com", "accounts.google.com", "drive.google.com", "photos.google.com",
+                       "www.googleapis.com", "googleusercontent.com", "lh7-fixture.googleusercontent.com",
+                       "github.com", "api.github.com", "avatars.githubusercontent.com",
+                       "other.s3.amazonaws.com", "productionresultssa0.blob.core.windows.net.example.invalid"):
+            with self.subTest(domain=domain):
+                self.assertFalse(generator.domain_matches(high, domain))
+
+    def test_upstream_whole_shared_suffix_in_high_traffic_is_rejected(self):
+        for source in ("meta_youtube", "meta_twitch", "meta_tiktok"):
+            for domain in ("googleapis.com", "googleusercontent.com", "github.com", "cloudfront.net"):
+                with self.subTest(source=source, domain=domain):
+                    sources = valid_sources()
+                    sources[source] += f"DOMAIN-SUFFIX,{domain}\n"
+                    with self.assertRaisesRegex(generator.RuleError, "entire shared domain"):
+                        generator.build_rules(**sources)
+
+    def test_github_list_drops_downloads_and_copilot(self):
+        built = generator.build_rules(**valid_sources())
+        github = built["GitHub.list"]
+        self.assertIn("DOMAIN-SUFFIX,github.com", github)
+        self.assertIn("DOMAIN-SUFFIX,githubusercontent.com", github)
+        self.assertIn("DOMAIN,github-api.arkoselabs.com", github)
+        for rule in GITHUB_STORAGE + ("DOMAIN-SUFFIX,ghcr.io", "DOMAIN,copilot-proxy.githubusercontent.com"):
+            with self.subTest(rule=rule):
+                self.assertNotIn(rule, github)
+        self.assertIn("DOMAIN,copilot-proxy.githubusercontent.com", built["AI-Meta.list"])
+
+    def test_github_source_without_storage_hosts_is_rejected(self):
+        sources = valid_sources()
+        sources["meta_github"] = source_text(GITHUB_SITE)
+        with self.assertRaisesRegex(generator.RuleError, "download storage hosts"):
+            generator.build_rules(**sources)
+
+    def test_google_list_keeps_play_and_drops_ai_and_covered_regexes(self):
+        built = generator.build_rules(**valid_sources())
+        google = built["Google.list"]
+        for domain in ("play.google.com", "googleplay.com", "accounts.google.com", "colab.research.google.com",
+                       "www.googleapis.com", "fixture.google"):
+            with self.subTest(domain=domain):
+                self.assertTrue(generator.domain_matches(google, domain))
+        self.assertNotIn("DOMAIN,gemini.google.com", google)
+        self.assertIn("DOMAIN,gemini.google.com", built["AI-Meta.list"])
+        self.assertFalse(any(rule.startswith("DOMAIN-REGEX") for rules in built.values() for rule in rules))
+
+    def test_unreviewed_google_regex_is_rejected(self):
+        sources = valid_sources()
+        sources["meta_google"] += "DOMAIN-REGEX,^fixture\\.example\\.invalid$\n"
+        with self.assertRaisesRegex(generator.RuleError, "unreviewed regex"):
+            generator.build_rules(**sources)
+
+    def test_published_lists_never_share_a_rule(self):
+        built = generator.build_rules(**valid_sources())
+        names = list(built)
+        for index, first in enumerate(names):
+            for second in names[index + 1:]:
+                with self.subTest(first=first, second=second):
+                    self.assertFalse(set(built[first]) & set(built[second]))
+
+    def test_ai_entries_win_over_high_traffic_and_are_reported(self):
+        sources = valid_sources()
+        sources["meta_ai"] += "DOMAIN-SUFFIX,yt3.googleusercontent.com\n"
+        built = generator.build_rules(**sources)
+        self.assertIn("DOMAIN-SUFFIX,yt3.googleusercontent.com", built["AI-Meta.list"])
+        self.assertNotIn("DOMAIN,yt3.googleusercontent.com", built["HighTraffic.list"])
+        self.assertEqual(generator.LAST_OVERLAPS, ["DOMAIN,yt3.googleusercontent.com"])
+
+    def test_high_traffic_capturing_an_ai_host_is_rejected(self):
+        for source in ("meta_ai", "kelee"):
+            with self.subTest(source=source):
+                sources = valid_sources()
+                sources[source] += "DOMAIN,ai-fixture.youtube.com\n"
+                with self.assertRaisesRegex(generator.RuleError, "HighTraffic would capture an AI rule"):
+                    generator.build_rules(**sources)
+
+    def test_required_traffic_domains_are_guarded(self):
+        cases = (
+            ("meta_youtube", "DOMAIN-SUFFIX,googlevideo.com"),
+            ("meta_twitch", "DOMAIN-SUFFIX,twitch.tv"),
+            ("meta_tiktok", "DOMAIN-SUFFIX,tiktok.com"),
+            ("meta_github", "DOMAIN-SUFFIX,github.com"),
+            ("meta_google", "DOMAIN-SUFFIX,googleapis.com"),
+        )
+        for source, line in cases:
+            with self.subTest(source=source):
+                sources = valid_sources()
+                sources[source] = source_text(item for item in sources[source].splitlines() if item != line)
+                with self.assertRaisesRegex(generator.RuleError, "source lost required domains"):
+                    generator.build_rules(**sources)
+
+
 class FetchTextTests(OfflineTestCase):
     def test_kelee_request_uses_the_compatible_loon_user_agent(self):
         content = b"DOMAIN,example.invalid\n"
@@ -700,8 +871,8 @@ class FetchSourcesTests(OfflineTestCase):
         self.assertEqual(sources, valid_sources())
         self.assertEqual(fetch.calls, list(fetch.responses))
         self.assertEqual(fetch.calls.count(generator.META_HEAD), 1)
-        self.assertTrue(all(f"/{REVISION}/" in url for url in fetch.calls[1:4]))
-        self.assertEqual(fetch.calls[4], generator.KELEE_URL)
+        self.assertTrue(all(f"/{REVISION}/" in url for url in fetch.calls[1:9]))
+        self.assertEqual(fetch.calls[9], generator.KELEE_URL)
 
     def test_invalid_revision_responses_stop_before_rule_downloads(self):
         invalid = ("not json", "{}", "null", "[]", '{"sha": null}', '{"sha": 7}',
@@ -736,6 +907,14 @@ class UpdateTests(OfflineTestCase):
                     if name == "AI-Kelee.list":
                         self.assertIn(generator.KELEE_URL, text)
                         self.assertIn("CC BY-NC-SA 4.0", text)
+                    elif name == "HighTraffic.list":
+                        for upstream in ("youtube", "twitch", "tiktok", "github"):
+                            self.assertIn(f"/{REVISION}/geo/geosite/classical/{upstream}.list", text)
+                        self.assertIn("#high-traffic", text)
+                    elif name == "GitHub.list":
+                        self.assertIn(f"/{REVISION}/geo/geosite/classical/github.list", text)
+                    elif name == "Google.list":
+                        self.assertIn(f"/{REVISION}/geo/geosite/classical/google.list", text)
                     else:
                         self.assertIn(f"/{REVISION}/", text)
                         self.assertIn("/anthropic.list", text)

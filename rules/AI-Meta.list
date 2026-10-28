@@ -1,7 +1,7 @@
 # Public routing rules for Loon and mihomo. Generated; do not edit.
-# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/251f53ed936ccefc5ed6407b0b85a06878e3dbe1/geo/geosite/classical/category-ai-!cn.list
-# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/251f53ed936ccefc5ed6407b0b85a06878e3dbe1/geo/geosite/classical/anthropic.list
-# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/251f53ed936ccefc5ed6407b0b85a06878e3dbe1/geo/geosite/classical/cursor.list
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/9f2b7462c7508ad85a1137e70d502b783c89794d/geo/geosite/classical/category-ai-!cn.list
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/9f2b7462c7508ad85a1137e70d502b783c89794d/geo/geosite/classical/anthropic.list
+# Source: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/9f2b7462c7508ad85a1137e70d502b783c89794d/geo/geosite/classical/cursor.list
 # Attribution: MetaCubeX/meta-rules-dat; underlying domain data: v2fly/domain-list-community.
 # Licenses: https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE
 # https://github.com/v2fly/domain-list-community/blob/master/LICENSE
@@ -14,8 +14,8 @@
 # https://prod.cursor.com/help/troubleshooting/sign-in-domains
 # https://prod.cursor.com/docs/enterprise/network-configuration
 # Change: use the audited Azure keyword + suffix compatibility rule.
-# Rules: 214
-# Content SHA-256: ca70fbede8325d3ad5f505c29d3a00db839fa76df2404b201b6fe89b6c5a4601
+# Rules: 220
+# Content SHA-256: 0c87b46b646080459291933b4b35bb4f3db88e68247973440e39f6b6a6b7bd95
 
 AND,((DOMAIN-KEYWORD,chatgpt-async-webps-prod-),(DOMAIN-SUFFIX,webpubsub.azure.com))
 DOMAIN,ai.google.dev
@@ -68,6 +68,7 @@ DOMAIN-SUFFIX,antigravity.google
 DOMAIN-SUFFIX,antspace.dev
 DOMAIN-SUFFIX,anythingllm.com
 DOMAIN-SUFFIX,arena.ai
+DOMAIN-SUFFIX,artificialanalysis.ai
 DOMAIN-SUFFIX,bard.google.com
 DOMAIN-SUFFIX,cerebras.ai
 DOMAIN-SUFFIX,chat.com
@@ -93,6 +94,7 @@ DOMAIN-SUFFIX,claudepages.dev
 DOMAIN-SUFFIX,claudestudio.com
 DOMAIN-SUFFIX,claudeusercontent.com
 DOMAIN-SUFFIX,clawhub.ai
+DOMAIN-SUFFIX,cline.bot
 DOMAIN-SUFFIX,clipdrop.co
 DOMAIN-SUFFIX,codeium.com
 DOMAIN-SUFFIX,codeiumdata.com
@@ -103,6 +105,8 @@ DOMAIN-SUFFIX,cohere.com
 DOMAIN-SUFFIX,comfy.org
 DOMAIN-SUFFIX,comfyci.org
 DOMAIN-SUFFIX,comfyregistry.org
+DOMAIN-SUFFIX,commandcode.ai
+DOMAIN-SUFFIX,context7.com
 DOMAIN-SUFFIX,copilot-stg.com
 DOMAIN-SUFFIX,copilot.cloud.microsoft
 DOMAIN-SUFFIX,copilot.com
@@ -172,6 +176,7 @@ DOMAIN-SUFFIX,manus.im
 DOMAIN-SUFFIX,manuscdn.com
 DOMAIN-SUFFIX,marscode.com
 DOMAIN-SUFFIX,meta.ai
+DOMAIN-SUFFIX,metaaiusercontent.com
 DOMAIN-SUFFIX,metaaivm.com
 DOMAIN-SUFFIX,midjourney.com
 DOMAIN-SUFFIX,minimax.io
@@ -184,6 +189,7 @@ DOMAIN-SUFFIX,notebook.google.com
 DOMAIN-SUFFIX,notebooklm.google
 DOMAIN-SUFFIX,notebooklm.google.com
 DOMAIN-SUFFIX,notegpt.io
+DOMAIN-SUFFIX,nousresearch.com
 DOMAIN-SUFFIX,novelai.net
 DOMAIN-SUFFIX,oaistatic.com
 DOMAIN-SUFFIX,oaistatsig.com

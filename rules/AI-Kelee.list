@@ -3,8 +3,8 @@
 # Attribution: iKeLee / luestr/ProxyResource; CC BY-NC-SA 4.0.
 # License: https://github.com/luestr/ProxyResource/blob/main/LICENSE
 # Change: normalize grammar; remove Meta-covered entries (Claude and Cursor merged into AI-Meta).
-# Rules: 161
-# Content SHA-256: 9f7d5c35fe6c2be6d24bd49dee3990712e60048e2d22bb20e38001ef35e87a24
+# Rules: 159
+# Content SHA-256: a7be8a7ea99d38430777dabdfaf99edf6bff2d41ded822d131f96e509f470664
 
 AND,((DOMAIN-KEYWORD,antigravity-auto-updater-),(DOMAIN-SUFFIX,run.app))
 AND,((DOMAIN-KEYWORD,openaicom-api-),(DOMAIN-SUFFIX,azurefd.net))
@@ -157,8 +157,6 @@ DOMAIN,xpersona.co
 DOMAIN,zed-us-east-1-zed-production.c15t.dev
 DOMAIN,zenmux.ai
 DOMAIN-SUFFIX,agnes-ai.com
-DOMAIN-SUFFIX,cline.bot
-DOMAIN-SUFFIX,commandcode.ai
 DOMAIN-SUFFIX,fireworks.ai
 DOMAIN-SUFFIX,gpustack.ai
 DOMAIN-SUFFIX,hyperbolic.ai
