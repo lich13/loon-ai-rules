@@ -331,19 +331,21 @@ class BuildRulesTests(OfflineTestCase):
         for rule in KELEE_XAI_FALLBACKS:
             self.assertIn(rule, built["AI-Kelee.list"])
 
-    def test_cursor_rejects_shared_infrastructure_github_and_other_provider_domains(self):
+    def test_cursor_skips_shared_infrastructure_github_and_other_provider_domains(self):
+        baseline = generator.build_rules(**valid_sources())
         blocked = tuple(generator.SHARED_INFRASTRUCTURE) + tuple(generator.CLAUDE_SUFFIXES) + (
             "github.com", "x.com", "twitter.com", "claude.app", "spacex.ai", "amazonaws.com",
             "s3.us-east-1.amazonaws.com", "chatgpt.com", "openai.com", "google.com",
             "grok.com", "x.ai", "grokipedia.com", "grokusercontent.com",
         )
-        for source in ("meta_cursor",):
-            for domain in blocked:
-                with self.subTest(source=source, domain=domain):
-                    sources = valid_sources()
-                    sources[source] += f"DOMAIN-SUFFIX,{domain}\n"
-                    with self.assertRaisesRegex(generator.RuleError, "Cursor source includes unrelated"):
-                        generator.build_rules(**sources)
+        for domain in blocked:
+            with self.subTest(domain=domain):
+                sources = valid_sources()
+                sources["meta_cursor"] += f"DOMAIN-SUFFIX,{domain}\n"
+                warnings = []
+                self.assertEqual(generator.build_rules(**sources, warnings=warnings), baseline)
+                self.assertIn(f"Meta Cursor: skipped DOMAIN-SUFFIX,{domain} "
+                              "(unrelated service or shared infrastructure)", warnings)
 
     def test_cursor_sources_require_each_core_domain_as_a_suffix_rule(self):
         for source, core in (("meta_cursor", CURSOR_CORE),):
@@ -470,6 +472,7 @@ class BuildRulesTests(OfflineTestCase):
         )
 
     def test_unapproved_shared_platforms_and_telemetry_do_not_enter_claude(self):
+        baseline = generator.build_rules(**valid_sources())
         blocked = (
             "datadoghq.com", "datadoghq.eu", "sift.com", "siftscience.com",
             "intercom.io", "intercomcdn.com", "cloudflare.com", "cloudflare.net",
@@ -481,32 +484,47 @@ class BuildRulesTests(OfflineTestCase):
                 with self.subTest(domain=domain, kind=kind):
                     sources = valid_sources()
                     sources["meta_claude"] += f"{kind},{domain}\n"
-                    with self.assertRaisesRegex(generator.RuleError, "shared (infrastructure|telemetry)"):
-                        generator.build_rules(**sources)
+                    warnings = []
+                    self.assertEqual(generator.build_rules(**sources, warnings=warnings), baseline)
+                    self.assertTrue(any(f"{kind},{domain} (shared infrastructure" in item for item in warnings))
 
-    def test_unrelated_asn_is_rejected_in_every_source(self):
+    def test_unknown_rule_is_skipped_with_a_warning_in_every_source(self):
+        baseline = generator.build_rules(**valid_sources())
         for source in valid_sources():
-            with self.subTest(source=source):
-                sources = valid_sources()
-                sources[source] += "IP-ASN,64512,no-resolve\n"
-                with self.assertRaises(generator.RuleError):
-                    generator.build_rules(**sources)
+            for line in ("IP-ASN,64512,no-resolve", "URL-REGEX,^https://fixture", "DOMAIN-SUFFIX,com"):
+                with self.subTest(source=source, rule=line):
+                    sources = valid_sources()
+                    sources[source] += line + "\n"
+                    warnings = []
+                    self.assertEqual(generator.build_rules(**sources, warnings=warnings), baseline)
+                    self.assertTrue(any("skipped" in item and line in item for item in warnings), warnings)
+
+    def test_a_source_that_is_mostly_unsupported_lines_is_treated_as_broken(self):
+        sources = valid_sources()
+        sources["meta_twitch"] += "<html>\n" * 10
+        with self.assertRaisesRegex(generator.RuleError, "Meta Twitch: 10 of 12 lines are not supported"):
+            generator.build_rules(**sources)
+        with self.assertRaisesRegex(generator.RuleError, "Meta Twitch:2: unsupported"):
+            generator.parse_rules("DOMAIN,twitch.tv\n<html>\n", "Meta Twitch")
 
     def test_anthropic_upstream_cannot_expand_to_ip_rules(self):
         sources = valid_sources()
         sources["meta_claude"] += source_text(REVIEWED_NETWORKS)
-        with self.assertRaisesRegex(generator.RuleError, "domain rules only"):
-            generator.build_rules(**sources)
+        warnings = []
+        built = generator.build_rules(**sources, warnings=warnings)
+        self.assertEqual(built, generator.build_rules(**valid_sources()))
+        self.assertIn(f"Meta Anthropic: skipped non-domain rule {REVIEWED_NETWORKS[0]}", warnings)
 
-    def test_ordinary_github_is_rejected_but_copilot_is_retained(self):
+    def test_ordinary_github_is_skipped_but_copilot_is_retained(self):
         baseline = generator.build_rules(**valid_sources())
         self.assertIn("DOMAIN,copilot-proxy.githubusercontent.com", baseline["AI-Meta.list"])
         for source in ("meta_ai", "kelee"):
             with self.subTest(source=source):
                 sources = valid_sources()
                 sources[source] += "DOMAIN-SUFFIX,github.com\n"
-                with self.assertRaisesRegex(generator.RuleError, "entire GitHub site"):
-                    generator.build_rules(**sources)
+                warnings = []
+                self.assertEqual(generator.build_rules(**sources, warnings=warnings), baseline)
+                self.assertTrue(any("DOMAIN-SUFFIX,github.com (entire GitHub site)" in item for item in warnings))
 
     def test_each_required_claude_domain_and_website_cdn_is_guarded(self):
         for line in CLAUDE_CORE[:-1]:
@@ -592,14 +610,17 @@ class TrafficListTests(OfflineTestCase):
             with self.subTest(domain=domain):
                 self.assertFalse(generator.domain_matches(high, domain))
 
-    def test_upstream_whole_shared_suffix_in_high_traffic_is_rejected(self):
+    def test_upstream_whole_shared_suffix_in_high_traffic_is_skipped(self):
+        baseline = generator.build_rules(**valid_sources())
         for source in ("meta_youtube", "meta_twitch", "meta_tiktok"):
             for domain in ("googleapis.com", "googleusercontent.com", "github.com", "cloudfront.net"):
                 with self.subTest(source=source, domain=domain):
                     sources = valid_sources()
                     sources[source] += f"DOMAIN-SUFFIX,{domain}\n"
-                    with self.assertRaisesRegex(generator.RuleError, "entire shared domain"):
-                        generator.build_rules(**sources)
+                    warnings = []
+                    built = generator.build_rules(**sources, warnings=warnings)
+                    self.assertEqual(built["HighTraffic.list"], baseline["HighTraffic.list"])
+                    self.assertTrue(any(f"DOMAIN-SUFFIX,{domain} (entire shared domain)" in item for item in warnings))
 
     def test_github_list_drops_downloads_and_copilot(self):
         built = generator.build_rules(**valid_sources())
@@ -629,11 +650,14 @@ class TrafficListTests(OfflineTestCase):
         self.assertIn("DOMAIN,gemini.google.com", built["AI-Meta.list"])
         self.assertFalse(any(rule.startswith("DOMAIN-REGEX") for rules in built.values() for rule in rules))
 
-    def test_unreviewed_google_regex_is_rejected(self):
+    def test_unreviewed_google_regex_is_skipped(self):
         sources = valid_sources()
         sources["meta_google"] += "DOMAIN-REGEX,^fixture\\.example\\.invalid$\n"
+        warnings = []
+        self.assertEqual(generator.build_rules(**sources, warnings=warnings), generator.build_rules(**valid_sources()))
+        self.assertTrue(any("skipped unreviewed regex rule" in item for item in warnings))
         with self.assertRaisesRegex(generator.RuleError, "unreviewed regex"):
-            generator.build_rules(**sources)
+            generator.strip_covered_regexes(sources["meta_google"], "Meta Google")
 
     def test_published_lists_never_share_a_rule(self):
         built = generator.build_rules(**valid_sources())
@@ -646,18 +670,29 @@ class TrafficListTests(OfflineTestCase):
     def test_ai_entries_win_over_high_traffic_and_are_reported(self):
         sources = valid_sources()
         sources["meta_ai"] += "DOMAIN-SUFFIX,yt3.googleusercontent.com\n"
-        built = generator.build_rules(**sources)
+        warnings = []
+        built = generator.build_rules(**sources, warnings=warnings)
         self.assertIn("DOMAIN-SUFFIX,yt3.googleusercontent.com", built["AI-Meta.list"])
         self.assertNotIn("DOMAIN,yt3.googleusercontent.com", built["HighTraffic.list"])
-        self.assertEqual(generator.LAST_OVERLAPS, ["DOMAIN,yt3.googleusercontent.com"])
+        self.assertIn("HighTraffic: DOMAIN,yt3.googleusercontent.com is already an AI rule; "
+                      "kept only in the AI lists", warnings)
 
-    def test_high_traffic_capturing_an_ai_host_is_rejected(self):
-        for source in ("meta_ai", "kelee"):
+    def test_ai_conflict_under_a_high_traffic_suffix_is_resolved_and_ai_wins(self):
+        for source, output in (("meta_ai", "AI-Meta.list"), ("kelee", "AI-Kelee.list")):
             with self.subTest(source=source):
                 sources = valid_sources()
                 sources[source] += "DOMAIN,ai-fixture.youtube.com\n"
-                with self.assertRaisesRegex(generator.RuleError, "HighTraffic would capture an AI rule"):
-                    generator.build_rules(**sources)
+                warnings = []
+                built = generator.build_rules(**sources, warnings=warnings)
+                self.assertIn("DOMAIN,ai-fixture.youtube.com", built[output])
+                self.assertNotIn("DOMAIN-SUFFIX,youtube.com", built["HighTraffic.list"])
+                self.assertFalse(generator.domain_matches(built["HighTraffic.list"], "ai-fixture.youtube.com"))
+                self.assertIn("HighTraffic: dropped DOMAIN-SUFFIX,youtube.com; it would capture AI rule "
+                              "DOMAIN,ai-fixture.youtube.com", warnings)
+                # The rest of HighTraffic is still published; other YouTube traffic falls through to Google.
+                self.assertTrue(generator.domain_matches(built["HighTraffic.list"], "rr1.googlevideo.com"))
+                self.assertTrue(any("YouTube is routed by Google.list" in item for item in warnings))
+                generator.verify_invariants(built)
 
     def test_required_traffic_domains_are_guarded(self):
         cases = (
@@ -964,95 +999,149 @@ class UpdateTests(OfflineTestCase):
                 generator.update(output, FixtureFetch())
             self.assertEqual(replacements, list(generator.OUTPUT_NAMES))
 
-    def test_failure_at_each_download_preserves_existing_files(self):
-        for failed_url in FixtureFetch().responses:
-            with self.subTest(source=failed_url.rsplit("/", 1)[-1]):
-                with tempfile.TemporaryDirectory() as temporary:
-                    output = Path(temporary) / "rules"
-                    generator.update(output, FixtureFetch())
-                    before = snapshot(output)
-                    fetch = FixtureFetch()
-                    fetch.responses[failed_url] = generator.RuleError("fixture download failed")
-                    with self.assertRaises(generator.RuleError):
-                        generator.update(output, fetch)
-                    self.assertEqual(snapshot(output), before)
-                    self.assertEqual(fetch.calls[-1], failed_url)
-                    self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
+    def assert_isolated_failure(self, fetch_or_sources, expected_failed, call=None):
+        """A failing list keeps its published file; every other list is still updated."""
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            generator.update(output, FixtureFetch())
+            for name in generator.OUTPUT_NAMES:  # mark every file so the test sees which ones were rewritten
+                path = output / name
+                path.write_text(path.read_text() + "DOMAIN,old-marker-" + name.lower().replace(".", "-") + ".invalid\n")
+            before = snapshot(output)
+            fetch = fetch_or_sources if callable(fetch_or_sources) else FixtureFetch(fetch_or_sources)
+            report = call(output, fetch) if call else generator.update(output, fetch)
+            self.assertEqual(set(report.failures), set(expected_failed))
+            self.assertFalse(report.ok)
+            after = snapshot(output)
+            for name in generator.OUTPUT_NAMES:
+                with self.subTest(output=name):
+                    if name in expected_failed:
+                        self.assertEqual(report.status[name], "kept")
+                        self.assertIn("keeping the previous version", report.failures[name])
+                        self.assertEqual(after[name], before[name])
+                    else:
+                        self.assertEqual(report.status[name], "built")
+                        self.assertNotIn(b"old-marker", after[name][0])
+            self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
+            return report
 
-    def test_download_timeout_and_io_failure_preserve_existing_files(self):
-        failures = (subprocess.TimeoutExpired("fixture download", 1), OSError("fixture transport failure"))
-        for error in failures:
+    def test_one_source_failing_keeps_its_old_file_while_others_update(self):
+        dependants = {
+            "meta": generator.OUTPUT_NAMES[:1] + ("AI-Meta.list", "GitHub.list", "Google.list"),
+            "category-ai-!cn.list": ("AI-Meta.list",),
+            "anthropic.list": ("AI-Meta.list",),
+            "cursor.list": ("AI-Meta.list",),
+            "youtube.list": ("HighTraffic.list",),
+            "twitch.list": ("HighTraffic.list",),
+            "tiktok.list": ("HighTraffic.list",),
+            "github.list": ("HighTraffic.list", "GitHub.list"),
+            "google.list": ("Google.list",),
+            "AI.lsr": ("AI-Kelee.list",),
+        }
+        for failed_url in FixtureFetch().responses:
+            key = failed_url.rsplit("/", 1)[-1]
+            with self.subTest(source=key):
+                fetch = FixtureFetch()
+                fetch.responses[failed_url] = generator.RuleError("fixture download failed")
+                report = self.assert_isolated_failure(fetch, dependants[key])
+                self.assertTrue(report.download_errors)
+                for name in dependants[key]:
+                    self.assertIn("source unavailable", report.failures[name])
+
+    def test_download_timeout_and_io_failure_only_affect_their_list(self):
+        for error in (subprocess.TimeoutExpired("fixture download", 1), OSError("fixture transport failure")):
             with self.subTest(error=type(error).__name__):
-                with tempfile.TemporaryDirectory() as temporary:
-                    output = Path(temporary) / "rules"
-                    generator.update(output, FixtureFetch())
-                    before = snapshot(output)
-                    fetch = FixtureFetch()
-                    fetch.responses[generator.KELEE_URL] = error
-                    with self.assertRaises(type(error)):
-                        generator.update(output, fetch)
-                    self.assertEqual(snapshot(output), before)
+                fetch = FixtureFetch()
+                fetch.responses[generator.KELEE_URL] = error
+                self.assert_isolated_failure(fetch, ("AI-Kelee.list",))
 
-    def test_actual_fetch_failure_at_each_source_preserves_existing_files(self):
-        for failed_url in FixtureFetch().responses:
+    def test_curl_failure_at_each_source_only_affects_its_lists(self):
+        for failed_url in (generator.KELEE_URL, FixtureFetch().responses.__iter__().__next__()):
             with self.subTest(source=failed_url.rsplit("/", 1)[-1]):
-                with tempfile.TemporaryDirectory() as temporary:
-                    output = Path(temporary) / "rules"
-                    generator.update(output, FixtureFetch())
-                    before = snapshot(output)
-                    fetch = FixtureFetch()
+                fetch = FixtureFetch()
 
-                    def download(command, **_kwargs):
-                        url = command[-1]
-                        content = fetch(url).encode("utf-8")
-                        return subprocess.CompletedProcess(
-                            command, 22 if url == failed_url else 0,
-                            stdout=content, stderr=b"fixture transport detail: example.invalid",
-                        )
+                def download(command, **_kwargs):
+                    url = command[-1]
+                    content = fetch(url).encode("utf-8")
+                    return subprocess.CompletedProcess(
+                        command, 22 if url == failed_url else 0,
+                        stdout=content, stderr=b"fixture transport detail: example.invalid",
+                    )
 
+                def call(output, _fetch):
                     with patch.object(generator.subprocess, "run", side_effect=download):
-                        with self.assertRaises(generator.RuleError):
-                            generator.update(output, generator.fetch_text)
-                    self.assertEqual(fetch.calls[-1], failed_url)
-                    self.assertEqual(snapshot(output), before)
-                    self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
+                        return generator.update(output, generator.fetch_text)
 
-    def test_validation_failure_preserves_every_destination_file(self):
-        invalid_sources = []
-        unknown = valid_sources()
-        unknown["kelee"] += "IP-ASN,64512,no-resolve\n"
-        invalid_sources.append(unknown)
-        unknown_cursor = valid_sources()
-        unknown_cursor["meta_cursor"] += "IP-ASN,64512,no-resolve\n"
-        invalid_sources.append(unknown_cursor)
-        missing = valid_sources()
-        missing["meta_claude"] = source_text(CLAUDE_CORE[1:])
-        invalid_sources.append(missing)
+                expected = ("AI-Kelee.list",) if failed_url == generator.KELEE_URL else (
+                    "HighTraffic.list", "AI-Meta.list", "GitHub.list", "Google.list")
+                self.assert_isolated_failure(fetch, expected, call)
+
+    def test_broken_source_keeps_old_list_and_publishes_the_rest(self):
+        cases = []
+        missing_claude = valid_sources()
+        missing_claude["meta_claude"] = source_text(CLAUDE_CORE[1:])
+        cases.append((missing_claude, ("AI-Meta.list",)))
         missing_cursor = valid_sources()
         missing_cursor["meta_cursor"] = source_text(CURSOR_CORE[:-1])
-        invalid_sources.append(missing_cursor)
-        for source in valid_sources():
+        cases.append((missing_cursor, ("AI-Meta.list",)))
+        collapsed_google = valid_sources()
+        collapsed_google["meta_google"] = source_text(GOOGLE_SITE[:8])
+        cases.append((collapsed_google, ("Google.list",)))
+        html = valid_sources()
+        html["meta_youtube"] = "<html>\n" * 50 + html["meta_youtube"][:200]
+        cases.append((html, ("HighTraffic.list",)))
+        for source, outputs in (("meta_ai", ("AI-Meta.list",)), ("meta_claude", ("AI-Meta.list",)),
+                                ("meta_cursor", ("AI-Meta.list",)), ("meta_youtube", ("HighTraffic.list",)),
+                                ("meta_twitch", ("HighTraffic.list",)), ("meta_tiktok", ("HighTraffic.list",)),
+                                ("meta_github", ("HighTraffic.list", "GitHub.list")),
+                                ("meta_google", ("Google.list",)), ("kelee", ("AI-Kelee.list",))):
             empty = valid_sources()
             empty[source] = ""
-            invalid_sources.append(empty)
-        for index, sources in enumerate(invalid_sources):
-            with self.subTest(fixture=index):
-                with tempfile.TemporaryDirectory() as temporary:
-                    output = Path(temporary) / "rules"
-                    generator.update(output, FixtureFetch())
-                    before = snapshot(output)
-                    with self.assertRaises(generator.RuleError):
-                        generator.update(output, FixtureFetch(sources))
-                    self.assertEqual(snapshot(output), before)
+            cases.append((empty, outputs))
+        for index, (sources, expected) in enumerate(cases):
+            with self.subTest(fixture=index, expected=expected):
+                self.assert_isolated_failure(sources, expected)
 
-    def test_failed_first_generation_does_not_create_output_directory(self):
+    def test_unknown_rule_is_skipped_and_every_list_is_still_published(self):
         with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary) / "not-created" / "rules"
+            output = Path(temporary) / "rules"
+            sources = valid_sources()
+            sources["kelee"] += "IP-ASN,64512,no-resolve\nDOMAIN,new-supplement.example.invalid\n"
+            report = generator.update(output, FixtureFetch(sources))
+            self.assertTrue(report.ok)
+            self.assertIn("DOMAIN,new-supplement.example.invalid", report.rules["AI-Kelee.list"])
+            self.assertTrue(any("skipped IP-ASN,64512,no-resolve" in item for item in report.warnings))
+            self.assertEqual({path.name for path in output.iterdir()}, set(generator.OUTPUT_NAMES))
+
+    def test_kept_list_drops_rules_that_now_belong_to_an_earlier_list(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            generator.update(output, FixtureFetch())
+            google = output / "Google.list"
+            google.write_text(google.read_text() + "DOMAIN-SUFFIX,newly-ai.example.invalid\n")
+            sources = valid_sources()
+            sources["meta_ai"] += "DOMAIN-SUFFIX,newly-ai.example.invalid\n"
+            sources["meta_google"] = ""
+            report = generator.update(output, FixtureFetch(sources))
+            self.assertEqual(report.status["Google.list"], "kept")
+            text = google.read_text()
+            self.assertNotIn("newly-ai.example.invalid", text)
+            self.assertIn(generator.KEPT_NOTE, text)
+            body = text.split("\n\n", 1)[1]
+            self.assertIn(f"# Content SHA-256: {hashlib.sha256(body.encode()).hexdigest()}", text)
+            self.assertIn("DOMAIN-SUFFIX,newly-ai.example.invalid", report.rules["AI-Meta.list"])
+            generator.verify_invariants(report.rules)
+
+    def test_failed_first_generation_publishes_the_other_lists(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
             fetch = FixtureFetch()
             fetch.responses[generator.KELEE_URL] = generator.RuleError("fixture download failed")
-            with self.assertRaises(generator.RuleError):
-                generator.update(output, fetch)
-            self.assertEqual(list(Path(temporary).iterdir()), [])
+            report = generator.update(output, fetch)
+            self.assertEqual(report.status["AI-Kelee.list"], "missing")
+            self.assertIn("no previous version", report.failures["AI-Kelee.list"])
+            self.assertEqual({path.name for path in output.iterdir()},
+                             set(generator.OUTPUT_NAMES) - {"AI-Kelee.list"})
 
     def test_staging_write_failure_preserves_every_existing_file(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1061,6 +1150,7 @@ class UpdateTests(OfflineTestCase):
             before = snapshot(output)
             sources = valid_sources()
             sources["kelee"] += "DOMAIN,new-supplement.example.invalid\n"
+            sources["meta_ai"] += "DOMAIN,new-provider.example.invalid\n"
             with patch.object(generator.os, "fsync", side_effect=[None, OSError("fixture staging write failed")]):
                 with patch.object(generator.os, "replace", wraps=generator.os.replace) as replace:
                     with self.assertRaisesRegex(OSError, "fixture staging write failed"):
@@ -1068,6 +1158,29 @@ class UpdateTests(OfflineTestCase):
                     replace.assert_not_called()
             self.assertEqual(snapshot(output), before)
             self.assertEqual([path.name for path in Path(temporary).iterdir()], ["rules"])
+
+    def test_main_exits_2_and_writes_the_job_summary_on_partial_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "rules"
+            generator.update(output, FixtureFetch())
+            summary = Path(temporary) / "summary.md"
+            sources = valid_sources()
+            sources["meta_google"] = ""
+            sources["kelee"] += "IP-ASN,64512,no-resolve\n"
+            argv = ["update_ai_rules.py", "--output", str(output)]
+            with patch.object(sys, "argv", argv), patch.dict(generator.os.environ, {"GITHUB_STEP_SUMMARY": str(summary)}), \
+                    patch.object(generator, "fetch_text", FixtureFetch(sources)), \
+                    patch("builtins.print") as printed:
+                with self.assertRaises(SystemExit) as stopped:
+                    generator.main()
+            self.assertEqual(stopped.exception.code, 2)
+            lines = [call.args[0] for call in printed.call_args_list]
+            self.assertTrue(any(line.startswith("::error::Google.list") for line in lines))
+            self.assertTrue(any(line.startswith("::warning::Kelee AI") for line in lines))
+            text = summary.read_text()
+            self.assertIn("沿用上次发布版本", text)
+            self.assertIn("IP-ASN,64512", text)
+            self.assertEqual(generator.annotation("warning", "a\nb%"), "::warning::a%0Ab%25")
 
     def test_identical_generation_does_not_rewrite_files(self):
         with tempfile.TemporaryDirectory() as temporary:

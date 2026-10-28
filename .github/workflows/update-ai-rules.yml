@@ -29,11 +29,27 @@ jobs:
         run: |
           python3 -m pip install --only-binary=:all: curl_cffi==0.16.3
       - name: Download and validate all public sources
-        run: python3 scripts/update_ai_rules.py --browser-tls
-      - name: Publish the complete rule set
+        id: generate
+        # 0 = every list rebuilt; 2 = some lists kept their previous version (the rest are still
+        # written and published); anything else = nothing usable was written.
+        run: |
+          set +e
+          python3 scripts/update_ai_rules.py --browser-tls
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
+            exit "$code"
+          fi
+          exit 0
+      - name: Publish the validated lists
+        if: steps.generate.outputs.code == '0' || steps.generate.outputs.code == '2'
         run: |
           set -euo pipefail
-          git add -- rules/HighTraffic.list rules/AI-Meta.list rules/AI-Kelee.list rules/GitHub.list rules/Google.list
+          for list in HighTraffic AI-Meta AI-Kelee GitHub Google; do
+            if [ -f "rules/$list.list" ]; then
+              git add -- "rules/$list.list"
+            fi
+          done
           git rm -f --cached --ignore-unmatch --quiet -- rules/Claude.list rules/Cursor.list
           if git diff --cached --quiet; then
             echo "Rules are unchanged."
@@ -43,3 +59,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "chore: update public routing rules"
           git push origin HEAD:main
+      - name: Fail the run when a list could not be rebuilt
+        if: steps.generate.outputs.code == '2'
+        run: |
+          echo "::error::Some lists kept their previously published version; see the job summary."
+          exit 1
