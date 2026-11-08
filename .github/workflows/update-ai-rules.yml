@@ -22,7 +22,8 @@ jobs:
           ref: main
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.x'
+          check-latest: true
       - name: Test conversion and failure handling
         run: python3 -m unittest discover -s scripts -p 'test_ai_rules.py' -v
       - name: Install compatible public-source transport
